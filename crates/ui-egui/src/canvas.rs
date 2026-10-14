@@ -41,6 +41,8 @@ pub struct CanvasState {
     /// When the bilingual switch key (Option, or Ctrl off macOS) went down, and whether it has
     /// been alone since ([`bilingual_switch_key`]).
     bi_key: Option<(f64, bool)>,
+    /// A click while peeking at the other language: the mouse handler switches to it there.
+    bi_click: bool,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
@@ -166,6 +168,7 @@ impl Default for CanvasState {
             mirror_textures: HashMap::new(),
             bi_epoch: (false, 0),
             bi_key: None,
+            bi_click: false,
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
@@ -688,8 +691,9 @@ fn switch_key(m: egui::Modifiers) -> (bool, bool) {
 /// word without showing the other language. Key presses come from this frame's events, not the
 /// keys held down, which a key whose release the input method swallowed would keep spoiling.
 fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
-    let (down, other, busy, now) = ctx.input(|i| {
+    let (down, other, busy, now, clicked) = ctx.input(|i| {
         let (down, other) = switch_key(i.modifiers);
+        let clicked = i.pointer.primary_pressed();
         let busy = i.pointer.any_down()
             || i.events.iter().any(|e| match e {
                 egui::Event::Key { key, pressed: true, .. } => {
@@ -699,8 +703,17 @@ fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
                 egui::Event::PointerButton { pressed: true, .. } => true,
                 _ => false,
             });
-        (down, other, busy, i.time)
+        (down, other, busy, i.time, clicked)
     });
+    // A click while peeking works in the language peeked at, where it was clicked.
+    if down
+        && clicked
+        && !other
+        && let Some((t, true)) = app.canvas.bi_key
+        && now - t >= PEEK_AFTER
+    {
+        app.canvas.bi_click = true;
+    }
     // A text box of the interface (Find, a dialog) has the keys.
     let typing_elsewhere = ctx.egui_wants_keyboard_input() && !app.canvas.focused;
     let clean = !other && !busy && !typing_elsewhere;
@@ -752,6 +765,23 @@ fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
     }
     let secs = if app.animations_on() { 0.12 } else { 0.0 };
     ctx.animate_value_with_time(egui::Id::new(("bilingual-blend", app.canvas.bi_epoch.1)), target, secs)
+}
+
+/// View › Bilingual: a click at (`page`, `x`, `y`) while peeking at the other language. The
+/// point is found in the other language's layout (laid out alike, and each paragraph there is
+/// its translation's text, so the offset is the translation's), then that language becomes the
+/// one worked in, with the insertion point there.
+fn peek_click(app: &mut WordApp, page: usize, x: f32, y: f32) {
+    let Some(mirror) = app.session.bilingual_mirror() else { return };
+    let Some(pos) = mirror.layout.hit(page, x, y, StoryRef::Body) else { return };
+    let flipped = app.session.view.bilingual_flipped;
+    if app.run("bilingual.switch", json!({"value": !flipped})).is_err() {
+        return;
+    }
+    let _ = app.run("caret.set", json!({"pos": serde_json::to_value(&pos).unwrap_or_default()}));
+    app.session.page_hint = page;
+    app.canvas.column_drag = None;
+    app.canvas.scroll_to_caret = true;
 }
 
 /// Make the interface fonts able to draw `text` (an input method's composition, a language name)
@@ -1977,6 +2007,13 @@ fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::Vec2) -> egu
 }
 
 fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    if std::mem::take(&mut app.canvas.bi_click)
+        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+        && let Some((page, x, y)) = page_at(rects, layout, scale, p)
+    {
+        peek_click(app, page, x, y);
+        return;
+    }
     // A pen or the eraser (Draw tab) owns the pointer.
     if crate::ink::pointer(app, ui, resp, rects, layout, scale) {
         return;
@@ -2950,10 +2987,56 @@ mod tests {
         assert!(!key_frame(&mut app, &ctx, 5.05, true, vec![egui::Event::Text("é".into())]));
         assert!(!key_frame(&mut app, &ctx, 5.1, false, vec![]));
         assert!(app.session.view.bilingual_flipped);
+        // A click while peeking is noted for the mouse handler; a click without a peek isn't.
+        let button = |pressed| {
+            vec![egui::Event::PointerButton {
+                pos: egui::pos2(10.0, 10.0),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]
+        };
+        let click = || button(true);
+        assert!(!key_frame(&mut app, &ctx, 5.5, true, click()));
+        assert!(!std::mem::take(&mut app.canvas.bi_click), "not peeking yet");
+        assert!(!key_frame(&mut app, &ctx, 5.6, false, button(false)));
+        assert!(!key_frame(&mut app, &ctx, 5.7, true, vec![]));
+        assert!(key_frame(&mut app, &ctx, 5.7 + PEEK_AFTER, true, vec![]));
+        let _ = key_frame(&mut app, &ctx, 6.0, true, click());
+        assert!(std::mem::take(&mut app.canvas.bi_click));
+        assert!(!key_frame(&mut app, &ctx, 6.1, false, button(false)));
+        assert!(app.session.view.bilingual_flipped, "letting go after a peek-click switches nothing more");
         // And it keeps working afterwards (it used to stop after typing Korean).
-        assert!(!key_frame(&mut app, &ctx, 6.0, true, vec![]));
-        assert!(!key_frame(&mut app, &ctx, 6.1, false, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 7.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 7.1, false, vec![]));
         assert!(!app.session.view.bilingual_flipped, "tapped back");
+    }
+
+    #[test]
+    fn a_click_while_peeking_works_there_in_the_language_peeked_at() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello there."})).unwrap();
+        app.run("bilingual.translate", json!({"text": "안녕하세요 거기."})).unwrap();
+        // Click (in the Korean shown over the page) just right of its third syllable.
+        let mirror = app.session.bilingual_mirror().unwrap();
+        let (page, line_x, line_y, para) = mirror.layout.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { path, x, y, para, .. } if path.0 == [0] => Some((0, *x, *y, para.clone())),
+                _ => None,
+            })
+            .unwrap();
+        let line = &para.lines[0];
+        let third = "안녕하".len();
+        let ci = para.clusters.iter().position(|c| c.start == third).unwrap();
+        let cx = line_x + line.xs[ci - line.c0] + 0.5;
+        peek_click(&mut app, page, cx, line_y + line.height / 2.0);
+        assert!(app.session.view.bilingual_flipped, "working in Korean");
+        assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "안녕하세요 거기.");
+        assert_eq!((app.session.sel.focus.path.0.clone(), app.session.sel.focus.off), (vec![0], third));
+        app.run("text.insert", json!({"text": "!"})).unwrap();
+        assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "안녕하!세요 거기.");
     }
 
     #[test]
