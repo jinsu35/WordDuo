@@ -934,8 +934,17 @@ impl WinitView {
             return;
         }
 
-        // Clear markedText
+        // Clear markedText. The system input method still holds the composition: have it
+        // discard it too, or it commits it with the next key, after the application has
+        // already finished it itself (WordCraft: a Korean syllable typed again elsewhere).
+        let composing = self.ivars().marked_text.borrow().length() > 0
+            || self.ivars().ime_state.get() == ImeState::Preedit;
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+        if composing {
+            if let Some(input_context) = self.inputContext() {
+                input_context.discardMarkedText();
+            }
+        }
 
         if self.ivars().ime_state.get() != ImeState::Disabled {
             self.ivars().ime_state.set(ImeState::Disabled);

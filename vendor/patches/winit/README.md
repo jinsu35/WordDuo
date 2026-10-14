@@ -30,6 +30,11 @@ and IME resets invalidate it. It does not join jamo in application text.
 
 The space guard is adapted from [#787 commit 2956f8b](https://github.com/cyfung1031/wordcraft/commit/2956f8b), related to [winit #4478](https://github.com/rust-windowing/winit/issues/4478). The commit marker resets before each key interpretation and explicit native command forwarding is retained (including Enter).
 
+`set_ime_allowed(false)` (which egui uses to interrupt a composition the application
+finished itself, on a click, a caret move or a bilingual language switch) also asks the
+input context to discard its marked text. Otherwise Apple Korean kept the syllable and
+committed it with the next key, wherever the insertion point was by then.
+
 Unlike #787, this override contains only the first-key and space fixes. Its guards are adapted
 to pristine 0.30.13: no `pending_commit` or `in_key_down` fields from #787's other
 patches are introduced. The disabled-state and empty-marked-text checks exclude

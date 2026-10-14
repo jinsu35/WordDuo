@@ -227,8 +227,12 @@ pub(crate) fn native_commit<'a>(app: &mut WordApp, text: &'a str) -> &'a str {
 }
 
 /// A new composition: whatever was finished before it is no longer pending in the input method.
+/// One that starts with it and goes on is the old one carried on ("녕" finished here, then
+/// Space: "녕 "), still to be dropped when it is committed; the same syllable alone is a new one.
 fn composing(app: &mut WordApp, text: &str) {
-    if !text.is_empty() {
+    if !text.is_empty()
+        && !app.canvas.ime_finished.as_deref().is_some_and(|done| !done.is_empty() && text.len() > done.len() && text.starts_with(done))
+    {
         app.canvas.ime_finished = None;
     }
 }
@@ -748,6 +752,12 @@ mod tests {
         app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
         ime_frame(&mut app, &ctx, vec![preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("가 ".into()))]);
         assert_eq!(text(&app), " w가오호 오");
+        // The log of the user's report: "녕" finished by a switch, then Space on the other page.
+        ime_frame(&mut app, &ctx, vec![preedit("녕")]);
+        ime_frame(&mut app, &ctx, vec![key(Key::ArrowLeft)]);
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        ime_frame(&mut app, &ctx, vec![preedit("녕 "), preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("녕 ".into())), preedit("")]);
+        assert!(text(&app).starts_with(" ") && text(&app).matches('녕').count() == 1, "only the space: {}", text(&app));
         // A new syllable composed after it is typed, even the same one.
         ime_frame(&mut app, &ctx, vec![preedit("나")]);
         ime_frame(&mut app, &ctx, vec![key(Key::ArrowLeft)]);
