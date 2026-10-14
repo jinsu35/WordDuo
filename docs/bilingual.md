@@ -30,8 +30,6 @@ beside it. Switching is not an undo step.
 
 | Gesture | Effect |
 |---|---|
-| **Tap ⌥ Option** (Alt) by itself | Switch the language you work in |
-| **Hold ⌥ Option** by itself | Peek at the other language while held |
 | **Twist two fingers** on the trackpad, like a dial (about 35° end to end) | Blend from one language to the other; past the middle, the language you work in switches too |
 | Slider at the bottom of the page (the language you work in is in bold) | Same as twisting, by mouse |
 | Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
@@ -61,4 +59,3 @@ For example:
 - Saving keeps the language you were working in as the visible text: Word shows that one.
 - Pagination matches line for line. A paragraph that splits across pages can split at a
   different line in each language when their line heights differ.
-- Holding Alt on Windows and Linux doesn't open KeyTips while the view is on.

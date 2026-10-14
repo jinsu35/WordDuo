@@ -35,9 +35,6 @@ pub struct CanvasState {
     /// View › Bilingual: the pages of the mirror document (each paragraph showing its
     /// translation), blended over `textures` (see [`wordcraft_engine::bilingual`]).
     mirror_textures: HashMap<usize, (u64, TextureHandle)>,
-    /// When Option (Alt) went down by itself, and whether it has stayed alone since (a tap
-    /// switches the bilingual view's language, a hold shows the other one).
-    bi_option: Option<(f64, bool)>,
     /// The bilingual view's language worked in, and how many times it has switched (the blend's
     /// easing starts afresh after a switch).
     bi_epoch: (bool, u64),
@@ -164,7 +161,6 @@ impl Default for CanvasState {
         CanvasState {
             textures: HashMap::new(),
             mirror_textures: HashMap::new(),
-            bi_option: None,
             bi_epoch: (false, 0),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
@@ -644,10 +640,6 @@ const TWIST_BLEND: f32 = 1.65;
 /// The blend switches the language worked in when it passes the middle by this much (so a dial
 /// resting near the middle doesn't switch back and forth).
 const SWITCH_MARGIN: f32 = 0.05;
-/// Longest press of Option (Alt) by itself that counts as a tap (switch the language worked in)
-/// rather than a hold (look at the other language while held), seconds.
-const TAP_SECS: f64 = 0.3;
-
 /// View › Bilingual: set the blend (0: the text the document opened with, 1: its translation),
 /// switching the language worked in when it passes the middle.
 fn set_bilingual_blend(app: &mut WordApp, blend: f32) {
@@ -676,61 +668,21 @@ fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
     }
 }
 
-/// Option (Alt) by itself over the focused document: `(down, clean)`, `clean` while no other key,
-/// modifier or mouse button is down with it (Option with a letter types an accent; with the mouse
-/// it selects a column).
-fn option_alone(app: &WordApp, ctx: &egui::Context) -> (bool, bool) {
-    if !app.canvas.focused {
-        return (false, false);
-    }
-    ctx.input(|i| {
-        let m = i.modifiers;
-        let clean = !(m.command || m.ctrl || m.shift || m.mac_cmd)
-            && i.keys_down.iter().all(|k| matches!(k, egui::Key::AltLeft | egui::Key::AltRight))
-            && !i.pointer.any_down();
-        (m.alt, clean)
-    })
-}
-
-/// The share of the page the mirror (the other language) covers this frame, eased: the blend,
-/// seen from the language worked in; while Option is held alone, the other language whole; a
-/// tap of Option switches the language worked in.
+/// The share of the page the mirror (the other language) covers this frame: the blend, seen
+/// from the language worked in, eased. (No modifier key peeks or switches: on macOS Option is
+/// everyday editing, ⌥⌫ and ⌥← among it, and a peek on its way flashed the other language.)
 fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
     let view = &app.session.view;
     let (blend, flipped) = (view.bilingual_mix.clamp(0.0, 1.0), view.bilingual_flipped);
-    let shown = if flipped { 1.0 - blend } else { blend };
-    // (Option is only watched with translations to show: it opens KeyTips on Windows and Linux.)
-    let (down, clean) = if on { option_alone(app, ctx) } else { (false, false) };
-    let now = ctx.input(|i| i.time);
-    let mut peek = false;
-    match (down, app.canvas.bi_option) {
-        (true, None) => app.canvas.bi_option = Some((now, clean)),
-        (true, Some((t, c))) => {
-            app.canvas.bi_option = Some((t, c && clean));
-            peek = c && clean;
-        }
-        (false, Some((t, c))) => {
-            app.canvas.bi_option = None;
-            if c && now - t <= TAP_SECS {
-                let _ = app.run("bilingual.switch", json!({}));
-            }
-        }
-        (false, None) => {}
-    }
-    if peek {
-        // Letting go after a peek doesn't show KeyTips (Windows, Linux).
-        app.ui.alt_chord_used = true;
-    }
-    let target = match (on, peek) {
+    let target = match (on, flipped) {
         (false, _) => 0.0,
-        (true, true) if shown < 0.5 => 1.0,
-        (true, true) => 0.0,
-        (true, false) => shown,
+        (true, true) => 1.0 - blend,
+        (true, false) => blend,
     };
     // A switch changes which language is the page and which the mirror: start the easing afresh
     // rather than fade from where the other side was.
-    if app.canvas.bi_epoch.0 != app.session.view.bilingual_flipped {
-        app.canvas.bi_epoch = (app.session.view.bilingual_flipped, app.canvas.bi_epoch.1.wrapping_add(1));
+    if app.canvas.bi_epoch.0 != flipped {
+        app.canvas.bi_epoch = (flipped, app.canvas.bi_epoch.1.wrapping_add(1));
     }
     let secs = if app.animations_on() { 0.12 } else { 0.0 };
     ctx.animate_value_with_time(egui::Id::new(("bilingual-blend", app.canvas.bi_epoch.1)), target, secs)
@@ -760,11 +712,7 @@ fn language_name(text: &str) -> &'static str {
 /// View › Bilingual: the blend slider at the foot of the document, between the two languages,
 /// and how to switch, peek and twist.
 fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens) {
-    let hint = if cfg!(target_os = "macos") {
-        "Tap ⌥ to switch · hold to peek · twist two fingers to blend"
-    } else {
-        "Tap Alt to switch · hold to peek · twist two fingers to blend"
-    };
+    let hint = "Twist two fingers to blend and switch";
     // The languages of the first pair, in the order the slider runs: the text the document opened
     // with, then its translation.
     let doc = &app.session.doc;

@@ -20,7 +20,7 @@ fn toggle(s: &mut Session, v: &Value, f: fn(&mut crate::ViewState) -> &mut bool)
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        // Show each paragraph's translation in its place: flip to it (hold Option/Alt) or blend it in.
+        // Show each paragraph's translation in its place: switch to it or blend it in.
         CommandSpec::new("bilingual.view", "Bilingual View", "View › Bilingual", |s, v| toggle(s, v, |x| &mut x.bilingual))
             .params(r#"{"value"?: bool}"#)
             .pure(),
@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"text"?: string, "lang"?: BCP 47 tag (default: Korean for English text, English for Korean)}"#),
         CommandSpec::new("bilingual.pair", "Pair Paragraphs", "View › Bilingual", pair).params(r#"{"by"?: "language" (default) | "alternate"}"#),
         CommandSpec::new("bilingual.swap", "Swap Languages", "View › Bilingual", swap),
-        // Tap Option (Alt) by itself, or turn the blend past the middle.
+        // Also when the blend is turned past the middle.
         CommandSpec::new("bilingual.switch", "Switch Language", "View › Bilingual", switch)
             .params(r#"{"value"?: bool (work in the translation), "keepBlend"?: bool}"#)
             .pure(),
