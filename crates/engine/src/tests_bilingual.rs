@@ -391,3 +391,41 @@ fn new_paragraphs_get_a_translation_without_a_language_tag_too() {
     assert_eq!(layout_of(&s).get(2), Some(&(false, "Hello again.".to_string())));
     assert_eq!(layout_of(&s).get(3), Some(&(true, "다시 안녕.".to_string())));
 }
+
+/// An empty paragraph whose other language has text shows that text greyed as a hint, on either
+/// page; typing replaces it, and it is never part of the document.
+#[test]
+fn an_untranslated_paragraph_shows_the_other_language_as_a_hint() {
+    let mut s = Session::new(doc_of(&["Hello there.", "Bye."]));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "bilingual.translate", json!({"text": ""}));
+    // English page: the translation is empty, so peeking shows the English greyed.
+    let m = s.bilingual_mirror().unwrap();
+    let shown = m.doc.body[0].as_para().unwrap();
+    assert_eq!(shown.plain_text(), "Hello there.");
+    assert_eq!(shown.runs[0].props.color, Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0x9A, 0x9A, 0x9A))));
+    // Korean page: the paragraph is empty, and shows the English greyed in its place.
+    run(&mut s, "bilingual.switch", json!({}));
+    assert_eq!(body_text(&s, 0), "", "the document holds no hint");
+    let doc = s.display_doc().unwrap();
+    assert_eq!(doc.body[0].as_para().unwrap().plain_text(), "Hello there.");
+    // Both pages still lay out alike.
+    let (primary, m) = (s.layout(), s.bilingual_mirror().unwrap());
+    assert_eq!(primary.pages.len(), m.layout.pages.len());
+    // A click on the hint puts the insertion point in the empty paragraph.
+    s.run("caret.set", &json!({"pos": {"story": "body", "path": [0], "off": 5}})).ok();
+    assert_eq!((s.sel.focus.path.0.clone(), s.sel.focus.off), (vec![0], 0));
+    // Composing there shows the composition, not the hint.
+    s.set_preedit("안");
+    assert_eq!(s.display_doc().unwrap().body[0].as_para().unwrap().plain_text(), "안");
+    s.set_preedit("");
+    // Typing replaces it.
+    run(&mut s, "text.insert", json!({"text": "안녕하세요."}));
+    assert!(s.display_doc().is_none_or(|d| d.body[0].as_para().unwrap().plain_text() == "안녕하세요."), "no hint once written");
+    assert_eq!(body_text(&s, 0), "안녕하세요.");
+    // Saved, the file holds no hint either.
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let back = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    assert!(!back.plain_text(StoryRef::Body).contains("9A9A9A"));
+    assert_eq!(back.body[0].as_para().unwrap().plain_text(), "안녕하세요.");
+}

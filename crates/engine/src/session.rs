@@ -99,6 +99,10 @@ pub(crate) struct Widened {
     pub ends: Selection,
 }
 
+/// What the shown document was made for ([`Session::display_doc`]): document revision,
+/// composition, bilingual hints.
+type DisplayKey = (u64, Option<(Pos, String)>, bool);
+
 /// View state that commands can change (ribbon View tab, status bar).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -411,7 +415,7 @@ pub struct Session {
     /// makes room ((document revision, where, what) it was made for).
     preedit: Option<(Pos, String)>,
     #[allow(clippy::type_complexity)]
-    preedit_doc: Option<(u64, Pos, String, Arc<Document>)>,
+    preedit_doc: Option<(DisplayKey, Option<Arc<Document>>)>,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
     /// Last mutating command (Repeat).
@@ -770,7 +774,7 @@ impl Session {
         let bilingual = self.view.bilingual && !show_hidden && mode != ViewMode::Outline;
         if let Some((r, w, h, m, sp, l, pf, o, hd, n)) = &self.layout
             && self.bi.on == bilingual
-            && self.preedit_matches()
+            && self.preedit_doc.as_ref().is_some_and(|(k, _)| *k == self.display_key())
             && *r == self.rev
             && (*w == width || mode == ViewMode::Print)
             && *h == height
@@ -844,42 +848,51 @@ impl Session {
         self.preedit.as_ref()
     }
 
-    /// Whether the shown document was made for the current composition.
-    fn preedit_matches(&self) -> bool {
-        match (&self.preedit, &self.preedit_doc) {
-            (None, None) => true,
-            (Some((p, t)), Some((r, q, u, _))) => *r == self.rev && p == q && t == u,
-            _ => false,
-        }
+    /// Whether the bilingual view is showing (on, translations hidden, not Outline).
+    fn bilingual_shown(&self) -> bool {
+        let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
+        let show_hidden = self.view.marks || self.prefs.marks.hidden || self.view.bilingual_edit;
+        self.view.bilingual && !show_hidden && mode != ViewMode::Outline
+    }
+
+    /// What the shown document depends on besides the document: the composition and whether
+    /// untranslated paragraphs show their other language as a hint.
+    fn display_key(&self) -> DisplayKey {
+        (self.rev, self.preedit.clone(), self.bilingual_shown())
     }
 
     /// The document as shown, when it differs from [`Session::doc`]: with the input method's
-    /// composition typed in at the insertion point. Pages are laid out ([`Session::layout`]) and
-    /// drawn from it.
+    /// composition typed in at the insertion point, and in the bilingual view each empty
+    /// paragraph whose other language has text showing that text greyed, as a hint to translate
+    /// ([`crate::bilingual::show_hints`]). Pages are laid out ([`Session::layout`]) and drawn
+    /// from it; none of it is ever part of the document.
     pub fn display_doc(&mut self) -> Option<Arc<Document>> {
-        let Some((pos, text)) = self.preedit.clone() else {
-            self.preedit_doc = None;
-            return None;
-        };
-        if let Some((r, p, t, d)) = &self.preedit_doc
-            && *r == self.rev
-            && *p == pos
-            && *t == text
+        let key = self.display_key();
+        if let Some((k, d)) = &self.preedit_doc
+            && *k == key
         {
-            return Some(d.clone());
+            return d.clone();
         }
         let mut doc = self.doc.clone();
-        let shown = doc.para_mut(pos.story, &pos.path).ok().and_then(|p| {
-            let props = CharProps { underline: Some(wordcraft_doc::props::Underline::Single), ..p.props_at(pos.off).clone() };
-            p.insert_text(pos.off, &text, &props).ok()
-        });
-        if shown.is_none() {
-            self.preedit_doc = None;
-            return None;
+        let mut changed = false;
+        if key.2 {
+            // Not where the composition is: it replaces the hint.
+            let skip = self.preedit.as_ref().map(|(p, _)| p);
+            changed |= crate::bilingual::show_hints(&mut doc, skip);
         }
-        let doc = Arc::new(doc);
-        self.preedit_doc = Some((self.rev, pos, text, doc.clone()));
-        Some(doc)
+        if let Some((pos, text)) = &self.preedit {
+            changed |= doc
+                .para_mut(pos.story, &pos.path)
+                .ok()
+                .and_then(|p| {
+                    let props = CharProps { underline: Some(wordcraft_doc::props::Underline::Single), ..p.props_at(pos.off).clone() };
+                    p.insert_text(pos.off, text, &props).ok()
+                })
+                .is_some();
+        }
+        let shown = changed.then(|| Arc::new(doc));
+        self.preedit_doc = Some((key, shown.clone()));
+        shown
     }
 
     /// Work in the other language of a bilingual document ([`crate::bilingual::swap_pairs`]):

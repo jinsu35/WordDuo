@@ -37,6 +37,12 @@ beside it. Switching is not an undo step.
 | Slider at the bottom of the page (the language you work in is in bold) | Same as twisting, by mouse |
 | Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
 
+Pairs are made paragraph by paragraph (Enter starts the next one). A paragraph you write in
+one language is in that language only: the other language's page shows an empty paragraph in
+its place, with the text you wrote greyed as a hint until you write its translation there. The
+hint is only shown, never saved. Splitting a paragraph keeps its translation with the piece
+that kept most of its text.
+
 The view is on by default. A document without translations looks as it would without it.
 
 ## Commands

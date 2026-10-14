@@ -84,10 +84,50 @@ pub fn translation_lang(source: &str) -> &'static str {
     if is_korean(source) { "en-US" } else { "ko-KR" }
 }
 
+/// The colour of a hint: the other language's text shown greyed in a paragraph not yet written.
+const HINT: Rgb = Rgb(0x9A, 0x9A, 0x9A);
+
+/// `p`'s text greyed as a hint (unchecked for spelling), keeping its paragraph's look.
+fn hinted(mut p: Paragraph, rev: u64) -> Paragraph {
+    for r in &mut p.runs {
+        r.props.hidden = None;
+        r.props.color = Some(TextColor::Rgb(HINT));
+        r.props.no_proof = Some(true);
+    }
+    p.rev = rev;
+    p
+}
+
+/// In `doc` as shown: each empty paragraph whose translation has text shows that text greyed, as
+/// a hint of what to write (typing replaces it; it is never part of the document). Not in the
+/// paragraph `skip` (where an input method is composing). Returns whether any shows one.
+pub fn show_hints(doc: &mut Document, skip: Option<&Pos>) -> bool {
+    let mut any = false;
+    for (s, t) in pairs(doc) {
+        if skip.is_some_and(|p| top_block(p.story, &p.path) == Some(s)) {
+            continue;
+        }
+        let (Some(src), Some(tr)) = (body_para(doc, s), body_para(doc, t)) else { continue };
+        if !src.text.is_empty() || tr.text.trim().is_empty() {
+            continue;
+        }
+        let shown = Paragraph { props: src.props.clone(), mark: src.mark.clone(), section: src.section.clone(), ..hinted(tr.clone(), next_rev()) };
+        if let Some(slot) = doc.body.get_mut(s) {
+            *slot = Arc::new(Block::Para(shown));
+            any = true;
+        }
+    }
+    any
+}
+
 /// `source`'s place filled with `tr`'s text: the text, runs and inline objects of the
 /// translation, shown (not hidden), with the source paragraph's formatting. Text with no colour
 /// of its own takes the translation style's (`tint`), so blended over the source it stands apart.
 fn shown_translation(source: &Paragraph, tr: &Paragraph, rev: u64, tint: Option<TextColor>) -> Paragraph {
+    // Not translated yet: the source greyed, as a hint.
+    if tr.text.is_empty() && !source.text.trim().is_empty() {
+        return hinted(source.clone(), rev);
+    }
     let mut p = source.clone();
     p.text = tr.text.clone();
     p.objects = tr.objects.clone();
