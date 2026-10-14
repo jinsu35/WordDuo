@@ -906,6 +906,15 @@ impl Session {
         let before = self.doc.clone();
         crate::bilingual::swap_pairs(&mut self.doc);
         let focus = crate::bilingual::carry_pos(&before, &self.doc, &self.sel.focus);
+        log::trace!(
+            target: "wordcraft_engine::bilingual",
+            "switch: insertion point {:?} {} of {} -> {} of {}",
+            self.sel.focus.path.0,
+            self.sel.focus.off,
+            before.para(self.sel.focus.story, &self.sel.focus.path).map_or(0, |p| p.text.len()),
+            focus.off,
+            self.doc.para(focus.story, &focus.path).map_or(0, |p| p.text.len())
+        );
         self.sel = Selection::caret(focus);
         for u in self.history.iter_mut().chain(self.redo.iter_mut()) {
             let u = Arc::make_mut(u);

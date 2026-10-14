@@ -3093,6 +3093,46 @@ mod tests {
         assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "Hello.");
     }
 
+    /// A switch keeps the insertion point at its paragraph's start or end, in the other language
+    /// too, also with a syllable still being composed there (finished first). Within the
+    /// paragraph it goes the same share of the way through.
+    #[test]
+    fn a_switch_keeps_the_insertion_point_at_its_paragraphs_start_or_end() {
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello there my friend."})).unwrap();
+        app.run("bilingual.translate", json!({"text": "안녕."})).unwrap();
+        let mut t = 1.0;
+        let mut tap = |app: &mut WordApp| {
+            assert!(!key_frame(app, &ctx, t, true, vec![]));
+            assert!(!key_frame(app, &ctx, t + 0.05, false, vec![]));
+            t += 1.0;
+        };
+        let at = |app: &WordApp| {
+            let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+            (app.session.sel.focus.off, p.text.len())
+        };
+        // The end, both ways.
+        tap(&mut app);
+        assert_eq!(at(&app), ("안녕.".len(), "안녕.".len()));
+        tap(&mut app);
+        assert_eq!(at(&app), (22, 22));
+        // The start, both ways.
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        tap(&mut app);
+        assert_eq!(at(&app).0, 0);
+        tap(&mut app);
+        assert_eq!(at(&app).0, 0);
+        // Composing at the end of the Korean: finished there, then the end of the English.
+        tap(&mut app);
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, "안녕.".len()));
+        app.canvas.ime_preedit = "하".into();
+        tap(&mut app);
+        assert_eq!(at(&app), (22, 22));
+        tap(&mut app);
+        assert_eq!(at(&app), ("안녕.하".len(), "안녕.하".len()));
+    }
+
     #[test]
     fn a_click_while_peeking_works_there_in_the_language_peeked_at() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
