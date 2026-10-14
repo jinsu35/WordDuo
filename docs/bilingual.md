@@ -43,7 +43,9 @@ its place, with the text you wrote greyed as a hint until you write its translat
 hint is only shown, never saved. Splitting a paragraph keeps its translation with the piece
 that kept most of its text.
 
-The view is on by default. A document without translations looks as it would without it.
+The view is on by default. A document without translations looks as it would without it, and
+the switch key works there too: the first tap gives every paragraph an empty translation and
+switches to it, to write the other language (a new document, written in one language so far).
 
 ## Commands
 

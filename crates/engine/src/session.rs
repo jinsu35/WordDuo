@@ -903,6 +903,19 @@ impl Session {
     /// the other language: its offsets would select other text there, which typing or pasting
     /// would then replace unseen. The undo steps' selections are carried the same way.
     pub fn switch_bilingual(&mut self) {
+        // A document without translations yet: every paragraph gets an empty one to write it in,
+        // in the undo history too, and it is in the language it was written in.
+        if crate::bilingual::pairs(&self.doc).is_empty() {
+            self.view.bilingual_flipped = false;
+            crate::bilingual::pair_all(&mut self.doc, &mut self.sel);
+            for u in self.history.iter_mut().chain(self.redo.iter_mut()) {
+                let u = Arc::make_mut(u);
+                crate::bilingual::pair_all(&mut u.doc, &mut u.sel);
+            }
+            if crate::bilingual::pairs(&self.doc).is_empty() {
+                return;
+            }
+        }
         let before = self.doc.clone();
         crate::bilingual::swap_pairs(&mut self.doc);
         let focus = crate::bilingual::carry_pos(&before, &self.doc, &self.sel.focus);

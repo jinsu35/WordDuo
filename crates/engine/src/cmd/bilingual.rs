@@ -206,14 +206,16 @@ fn swap(s: &mut Session, _: &Value) -> CmdResult {
 /// too, so undoing takes back edits in either language. `value` is whether to work in the
 /// translation (the language hidden when the document was opened); without it, the other one.
 /// The blend goes all the way to the language worked in, unless `keepBlend` (a dial turned past
-/// the middle).
+/// the middle). A document without translations gets an empty one for every paragraph first, to
+/// write in the other language.
 fn switch(s: &mut Session, v: &Value) -> CmdResult {
-    if pairs(&s.doc).is_empty() {
-        return Err(CmdError::Failed("there are no translations to switch to".into()));
-    }
-    let to = p::bool(v, "value").unwrap_or(!s.view.bilingual_flipped);
-    if to != s.view.bilingual_flipped {
+    let fresh = pairs(&s.doc).is_empty();
+    let to = if fresh { p::bool(v, "value").unwrap_or(true) } else { p::bool(v, "value").unwrap_or(!s.view.bilingual_flipped) };
+    if to != s.view.bilingual_flipped || (fresh && to) {
         s.switch_bilingual();
+    }
+    if pairs(&s.doc).is_empty() {
+        return Err(CmdError::Failed("there are no paragraphs to translate".into()));
     }
     if !p::bool(v, "keepBlend").unwrap_or(false) {
         s.view.bilingual_mix = if to { 1.0 } else { 0.0 };

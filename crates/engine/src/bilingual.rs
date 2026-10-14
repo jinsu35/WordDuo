@@ -268,6 +268,39 @@ fn pair_new_paragraphs(before: &Document, doc: &mut Document, sel: &mut crate::S
     added
 }
 
+/// Give every body paragraph without a translation an empty one (tagged with the other
+/// language when the paragraph has text), so a document written in one language can be switched
+/// to the other and translated there. Top-level selection paths follow the paragraphs that move.
+/// Returns whether any was added.
+pub fn pair_all(doc: &mut Document, sel: &mut crate::Selection) -> bool {
+    let mut added = false;
+    let mut i = 0;
+    while i < doc.body.len() {
+        let unpaired = body_para(doc, i).is_some_and(|p| !is_translation(p) && p.section.is_none()) && translation_of(doc, i).is_none();
+        if unpaired {
+            let lang = body_para(doc, i).map(|p| p.text.trim()).filter(|t| !t.is_empty()).map(|t| translation_lang(t).to_string());
+            let tr = Paragraph::with_text("", CharProps { lang, ..Default::default() }).styled(STYLE);
+            doc.body.insert(i + 1, Arc::new(Block::Para(tr)));
+            for p in [&mut sel.anchor, &mut sel.focus] {
+                if p.story == StoryRef::Body
+                    && let Some(k) = p.path.0.first_mut()
+                    && *k as usize > i
+                {
+                    *k += 1;
+                }
+            }
+            added = true;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    if added {
+        ensure_style(doc);
+    }
+    added
+}
+
 /// What a copy holds of `frag`, copied from a document whose translations are hidden: no
 /// hidden translation paragraphs (they weren't seen), and none at its end either (a selection
 /// ending at the start of one), whose style a paste would otherwise bring along.

@@ -203,8 +203,11 @@ fn switching_language_edits_the_language_shown() {
     // Turning the dial past the middle keeps the blend where it is.
     let r = run(&mut s, "bilingual.switch", json!({"value": true, "keepBlend": true}));
     assert_eq!(r["blend"].as_f64(), Some(0.0));
-    // Nothing to switch to without translations.
-    assert!(Session::new(doc_of(&["Only English."])).run("bilingual.switch", &json!({})).is_err());
+    // Without translations, a switch makes them; with nothing to translate, it fails.
+    assert!(Session::new(doc_of(&["Only English."])).run("bilingual.switch", &json!({})).is_ok());
+    let mut empty = Session::new(wordcraft_doc::Document::new());
+    empty.doc.body.clear();
+    assert!(empty.run("bilingual.switch", &json!({})).is_err());
 }
 
 /// An input method's composition is laid out with the text (so what follows makes room for it,
@@ -428,4 +431,45 @@ fn an_untranslated_paragraph_shows_the_other_language_as_a_hint() {
     let back = crate::io::open_bytes("x.docx", &bytes).unwrap();
     assert!(!back.plain_text(StoryRef::Body).contains("9A9A9A"));
     assert_eq!(back.body[0].as_para().unwrap().plain_text(), "안녕하세요.");
+}
+
+/// The user's report: a new document, ⌥ did nothing. A document without translations switches
+/// too: every paragraph gets an empty translation to write the other language in, and the
+/// undo history keeps working in either language.
+#[test]
+fn a_new_document_switches_to_write_the_other_language() {
+    for blank in [true, false] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        if blank {
+            run(&mut s, "file.new", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": "Hello."}));
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": "Bye."}));
+        run(&mut s, "bilingual.switch", json!({}));
+        assert!(s.view.bilingual_flipped, "working in the other language");
+        assert_eq!(pairs(&s.doc).len(), 2, "every paragraph has a translation");
+        let shown: Vec<String> =
+            s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| !crate::bilingual::is_translation(p)).map(|p| p.plain_text()).collect();
+        assert_eq!(shown, vec!["", ""], "the other language is empty, to write");
+        assert_eq!(s.sel.focus.path.0, vec![2], "still in the second paragraph");
+        run(&mut s, "text.insert", json!({"text": "잘 가."}));
+        // Undo in either language, then back.
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "bilingual.switch", json!({}));
+        assert!(!s.view.bilingual_flipped);
+        let english: Vec<String> =
+            s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| !crate::bilingual::is_translation(p)).map(|p| p.plain_text()).collect();
+        assert_eq!(english.first().map(String::as_str), Some("Hello."), "{english:?}");
+        assert!(!pairs(&s.doc).is_empty());
+        run(&mut s, "edit.redo", json!({}));
+        run(&mut s, "edit.redo", json!({}));
+        run(&mut s, "bilingual.switch", json!({}));
+        assert!(body_texts(&s).contains(&"잘 가.".to_string()), "{:?}", body_texts(&s));
+    }
+}
+
+fn body_texts(s: &Session) -> Vec<String> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| !crate::bilingual::is_translation(p)).map(|p| p.plain_text()).collect()
 }

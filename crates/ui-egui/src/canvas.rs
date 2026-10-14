@@ -766,11 +766,19 @@ fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
     }
 }
 
+/// The switch key this frame ([`bilingual_switch_key`]), `on` when there is another language to
+/// show: whether to peek at it. It works before there are translations too, where a tap makes
+/// them (`bilingual.switch`), but not while reading.
+fn bilingual_peek(app: &mut WordApp, ctx: &egui::Context, on: bool) -> bool {
+    let keys = on || (app.session.view.bilingual && !app.session.view.read_mode);
+    keys && bilingual_switch_key(app, ctx) && on
+}
+
 /// The share of the page the mirror (the other language) covers this frame, eased: the blend,
 /// seen from the language worked in, or while the switch key is held alone the other language
 /// whole ([`bilingual_switch_key`]).
 fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
-    let peek = on && bilingual_switch_key(app, ctx);
+    let peek = bilingual_peek(app, ctx, on);
     let view = &app.session.view;
     let (blend, flipped) = (view.bilingual_mix.clamp(0.0, 1.0), view.bilingual_flipped);
     let shown = if flipped { 1.0 - blend } else { blend };
@@ -3003,7 +3011,8 @@ mod tests {
         let mut peek = false;
         let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
         let mut out = ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| {
-            peek = bilingual_switch_key(app, ui.ctx());
+            let on = app.session.bilingual_mirror().is_some();
+            peek = bilingual_peek(app, ui.ctx(), on);
         });
         out.textures_delta.clear();
         peek
@@ -3063,6 +3072,32 @@ mod tests {
         assert!(!key_frame(&mut app, &ctx, 7.0, true, vec![]));
         assert!(!key_frame(&mut app, &ctx, 7.1, false, vec![]));
         assert!(!app.session.view.bilingual_flipped, "tapped back");
+    }
+
+    /// The user's report: a new document from the released app, and ⌥ did nothing. A tap in a
+    /// document without translations switches to write the other language.
+    #[test]
+    fn the_switch_key_works_in_a_new_document() {
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("file.new", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Hello."})).unwrap();
+        assert!(app.session.bilingual_mirror().is_none(), "no translations yet");
+        assert!(!key_frame(&mut app, &ctx, 1.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 1.1, false, vec![]));
+        assert!(app.session.view.bilingual_flipped, "a tap switches");
+        assert!(app.session.bilingual_mirror().is_some(), "the other language is there to write in");
+        // Holding it now peeks at the English.
+        assert!(!key_frame(&mut app, &ctx, 2.0, true, vec![]));
+        assert!(key_frame(&mut app, &ctx, 2.0 + PEEK_AFTER, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 2.5, false, vec![]));
+        // Reading, it stays off.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello."})).unwrap();
+        app.session.view.read_mode = true;
+        assert!(!key_frame(&mut app, &ctx, 3.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 3.1, false, vec![]));
+        assert!(!app.session.view.bilingual_flipped);
     }
 
     /// The user's report: "금" still being composed on the Korean page, ⌥ tapped to switch, and
