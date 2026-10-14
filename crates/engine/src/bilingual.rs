@@ -16,7 +16,7 @@ use std::sync::Arc;
 use wordcraft_doc::para::{Paragraph, next_rev};
 use wordcraft_doc::props::{CharProps, Rgb, TextColor};
 use wordcraft_doc::styles::{Style, StyleKind};
-use wordcraft_doc::{Block, Document, Path, StoryRef};
+use wordcraft_doc::{Block, Document, Path, Pos, StoryRef};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed};
 
 /// The paragraph style that marks a translation.
@@ -124,6 +124,23 @@ pub fn swap_pairs(doc: &mut Document) -> usize {
         }
     }
     all.len()
+}
+
+/// Where `pos` (in `before`) goes once its paragraph's text changed language (`after`): the same
+/// share of the way through the paragraph, at a character boundary. Offsets don't carry over
+/// between two languages' texts; a paragraph whose text didn't change keeps its offset.
+pub fn carry_pos(before: &Document, after: &Document, pos: &Pos) -> Pos {
+    let (Some(a), Some(b)) = (before.para(pos.story, &pos.path), after.para(pos.story, &pos.path)) else {
+        return pos.clone();
+    };
+    if a.text == b.text {
+        return pos.clone();
+    }
+    let chars_before = a.text.get(..pos.off.min(a.text.len())).map_or(0, |t| t.chars().count());
+    let total = a.text.chars().count().max(1);
+    let want = (chars_before as f64 / total as f64 * b.text.chars().count() as f64).round() as usize;
+    let off = b.text.char_indices().nth(want).map_or(b.text.len(), |(i, _)| i);
+    Pos { off, ..pos.clone() }
 }
 
 /// Revisions of mirror paragraphs, kept from one mirror to the next so unchanged pairs hit the

@@ -244,3 +244,36 @@ fn a_composition_makes_room_in_the_text_without_entering_the_document() {
         assert!(s.display_doc().is_none());
     }
 }
+
+/// Copy a sentence in one language, switch, paste: nothing in either language is lost. The
+/// selection used to keep its offsets across the switch, selecting other text there unseen,
+/// which the paste then replaced.
+#[test]
+fn switching_language_never_carries_a_selection_into_the_other_text() {
+    let mut s = Session::new(doc_of(&["A good interpreter listens for intent.", "Second."]));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "bilingual.translate", json!({"text": "좋은 통역사는 의도를 듣는다."}));
+    run(&mut s, "bilingual.switch", json!({}));
+    run(&mut s, "select.text", json!({"text": "좋은 통역사는"}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "bilingual.switch", json!({}));
+    assert!(s.sel.is_collapsed(), "a selection doesn't survive the switch");
+    run(&mut s, "edit.paste", json!({}));
+    let english = body_text(&s, 0);
+    assert!(english.contains("좋은 통역사는") && english.replace("좋은 통역사는", "") == "A good interpreter listens for intent.", "{english}");
+    run(&mut s, "bilingual.switch", json!({}));
+    assert_eq!(body_text(&s, 0), "좋은 통역사는 의도를 듣는다.", "the Korean is whole");
+    // The insertion point lands about as far through the other language's paragraph.
+    let mut s = Session::new(doc_of(&["abcdefghij"]));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "bilingual.translate", json!({"text": "가나다라마바사아자차"}));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 5));
+    run(&mut s, "bilingual.switch", json!({}));
+    assert_eq!(s.sel.focus.off, "가나다라마".len());
+    // An undo step's selection is carried too: undoing never selects the other language's text.
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    run(&mut s, "bilingual.switch", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.sel.is_collapsed());
+    assert!(s.doc.para_at(&s.sel.focus).is_some_and(|p| p.text.is_char_boundary(s.sel.focus.off)));
+}

@@ -885,10 +885,20 @@ impl Session {
     /// Work in the other language of a bilingual document ([`crate::bilingual::swap_pairs`]):
     /// the document and every undo and redo step swap each paragraph with its translation, so the
     /// history still matches the document. The document counts as changed.
+    ///
+    /// A selection becomes an insertion point the same share of the way through its paragraph in
+    /// the other language: its offsets would select other text there, which typing or pasting
+    /// would then replace unseen. The undo steps' selections are carried the same way.
     pub fn switch_bilingual(&mut self) {
+        let before = self.doc.clone();
         crate::bilingual::swap_pairs(&mut self.doc);
+        let focus = crate::bilingual::carry_pos(&before, &self.doc, &self.sel.focus);
+        self.sel = Selection::caret(focus);
         for u in self.history.iter_mut().chain(self.redo.iter_mut()) {
-            crate::bilingual::swap_pairs(&mut Arc::make_mut(u).doc);
+            let u = Arc::make_mut(u);
+            let before = u.doc.clone();
+            crate::bilingual::swap_pairs(&mut u.doc);
+            u.sel = Selection::caret(crate::bilingual::carry_pos(&before, &u.doc, &u.sel.focus));
         }
         self.view.bilingual_flipped = !self.view.bilingual_flipped;
         self.typing_open = false;
