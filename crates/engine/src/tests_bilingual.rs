@@ -51,7 +51,9 @@ fn a_translation_is_hidden_and_takes_no_room() {
     assert_eq!(pairs(&s.doc), vec![(0, 1)]);
     assert_eq!(body_text(&s, 1), "빠른 갈색 여우.");
     assert_eq!(s.doc.body[1].as_para().and_then(|p| p.props.style.as_deref()), Some(STYLE));
-    // The paragraph after it is where it was without the translation.
+    // The paragraph after it is where it was without the translation (the bilingual view off:
+    // it would pad the paragraph to the translation's height).
+    s.view.bilingual = false;
     let (a, b) = (plain.layout(), s.layout());
     assert_eq!(top_of(&a, 1), top_of(&b, 2));
     // Shown for editing, it takes its line.
@@ -88,8 +90,8 @@ fn both_languages_sit_in_the_same_place() {
         run(&mut s, "bilingual.translate", json!({"text": t}));
     }
     assert_eq!(pairs(&s.doc), vec![(0, 1), (3, 4)]);
-    assert!(s.bilingual_mirror().is_none(), "off by default");
-    run(&mut s, "bilingual.view", json!({"value": true}));
+    assert!(s.view.bilingual, "on by default");
+    assert!(Session::new(doc_of(&["No translations."])).bilingual_mirror().is_none(), "nothing to mirror");
     let primary = s.layout();
     let m = s.bilingual_mirror().unwrap();
     assert_eq!(m.doc.body.len(), s.doc.body.len(), "same block structure");
@@ -103,6 +105,7 @@ fn both_languages_sit_in_the_same_place() {
     }
     // The long translation pushed the text after it down in the primary view too.
     let mut off = Session::new(s.doc.clone());
+    off.view.bilingual = false;
     assert!(top_of(&primary, 2).unwrap().1 > top_of(&off.layout(), 2).unwrap().1 + 20.0);
     // Editing the text keeps the two in step.
     s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(3, 0));
@@ -152,6 +155,7 @@ fn translations_survive_a_docx_round_trip() {
     assert_eq!(back.styles.get(STYLE).and_then(|st| st.chr.hidden), Some(true));
     // On the page it takes no room: the next paragraph starts where the first one's space ends.
     let (mut t, mut u) = (Session::new(back), Session::new(doc_of(&["Hello.", "Bye."])));
+    t.view.bilingual = false;
     assert_eq!(top_of(&t.layout(), 2), top_of(&u.layout(), 1));
 }
 

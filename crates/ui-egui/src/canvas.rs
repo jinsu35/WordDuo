@@ -630,9 +630,9 @@ impl PageKeys {
     }
 }
 
-/// How far a two-finger twist moves the bilingual blend, per radian: a quarter turn
-/// (about 70°) goes from the text alone to the translation alone.
-const TWIST_BLEND: f32 = 0.8;
+/// How far a two-finger twist moves the bilingual blend, per radian: one comfortable twist
+/// (about 35°) goes from the text alone to the translation alone.
+const TWIST_BLEND: f32 = 1.65;
 
 /// View › Bilingual: turn this frame's two-finger twist on the trackpad into the translation
 /// blend, like a dial: clockwise shows more of the translation, anticlockwise more of the text.
@@ -679,7 +679,8 @@ fn flip_held(app: &mut WordApp, ctx: &egui::Context) -> bool {
 /// other language whole; eased between the two.
 fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
     let mix = app.session.view.bilingual_mix.clamp(0.0, 1.0);
-    let target = match (on, flip_held(app, ctx)) {
+    // (Option is only watched with translations to show: it opens KeyTips on Windows and Linux.)
+    let target = match (on, on && flip_held(app, ctx)) {
         (false, _) => 0.0,
         (true, true) if mix < 0.5 => 1.0,
         (true, true) => 0.0,
@@ -690,7 +691,7 @@ fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
 }
 
 /// View › Bilingual: the blend slider at the foot of the document, and how to flip and twist.
-fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, has_pairs: bool, t: &Tokens) {
+fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens) {
     let flip =
         if cfg!(target_os = "macos") { "Hold ⌥ to flip · twist two fingers to blend" } else { "Hold Alt to flip · twist two fingers to blend" };
     egui::Area::new(egui::Id::new("bilingual-chip"))
@@ -700,10 +701,6 @@ fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, has_pairs:
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if !has_pairs {
-                        ui.label(egui::RichText::new(tl!("No translations yet: View › Bilingual › Add Translation")).color(t.text_dim));
-                        return;
-                    }
                     ui.label(tl!("Text"));
                     ui.spacing_mut().slider_width = 180.0;
                     let mut mix = app.session.view.bilingual_mix;
@@ -853,8 +850,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
         let _ = app.run(id, json!({"value": pct}));
     }
-    if app.session.view.bilingual && !app.session.view.read_mode {
-        bilingual_chip(app, ui.ctx(), area, mirror.is_some(), &t);
+    // On by default, so only a document with translations shows the blend slider.
+    if mirror.is_some() && !app.session.view.read_mode {
+        bilingual_chip(app, ui.ctx(), area, &t);
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
     let geo = geometry(app, &layout, avail);

@@ -181,8 +181,9 @@ pub struct ViewState {
     #[serde(default)]
     pub design_mode: bool,
     /// View › Bilingual: lay out each paragraph's translation in the same place as the paragraph,
-    /// so the editor can flip to it or blend it in (see [`crate::bilingual`]).
-    #[serde(default)]
+    /// so the editor can flip to it or blend it in (see [`crate::bilingual`]). On by default: a
+    /// document without translations looks and lays out as it would without it.
+    #[serde(default = "on")]
     pub bilingual: bool,
     /// How much of the translation the bilingual view blends over the text: 0 (the text alone) to
     /// 1 (the translation alone).
@@ -248,7 +249,7 @@ impl Default for ViewState {
             hide_white_space: false,
             outline: Default::default(),
             design_mode: false,
-            bilingual: false,
+            bilingual: true,
             bilingual_mix: 0.0,
             bilingual_edit: false,
         }

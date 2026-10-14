@@ -17,7 +17,7 @@ paragraph style. That style is hidden text (`w:vanish`) in blue, so:
 
 ## The view
 
-`View › Bilingual › Bilingual View` lays out a *mirror* of the document in which each paired
+`View › Bilingual › Bilingual View` (on by default) lays out a *mirror* of the document in which each paired
 paragraph shows its translation, keeping the source paragraph's formatting
 (`crates/engine/src/bilingual.rs`). The shorter language of each pair is padded
 (`LayoutOptions::pad_after`) so both documents paginate alike, so every paragraph and its
