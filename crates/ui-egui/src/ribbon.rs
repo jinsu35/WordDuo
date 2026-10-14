@@ -1643,6 +1643,18 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
+    // For translators: each paragraph's translation in the same place on the page.
+    group(ui, "Bilingual", None, app, |ui, app| {
+        big(ui, app, "bilingual", "Bilingual\nView", "bilingual.view", json!({}), v.bilingual);
+        stack(ui, |ui| {
+            small(ui, app, "addTranslation", Some("Add Translation"), "Add Translation", "bilingual.translate", json!({}), false);
+            small(ui, app, "editTranslations", Some("Edit Translations"), "Edit Translations", "bilingual.edit", json!({}), v.bilingual_edit);
+            small(ui, app, "pairParagraphs", Some("Pair Paragraphs"), "Pair Paragraphs", "bilingual.pair", json!({}), false);
+        });
+        stack(ui, |ui| {
+            small(ui, app, "swapLanguages", Some("Swap Languages"), "Swap Languages", "bilingual.swap", json!({}), false);
+        });
+    });
     group(ui, "Zoom", None, app, |ui, app| {
         big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);

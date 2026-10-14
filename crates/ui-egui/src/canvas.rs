@@ -32,6 +32,9 @@ const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
+    /// View › Bilingual: the pages of the mirror document (each paragraph showing its
+    /// translation), blended over `textures` (see [`wordcraft_engine::bilingual`]).
+    mirror_textures: HashMap<usize, (u64, TextureHandle)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
@@ -154,6 +157,7 @@ impl Default for CanvasState {
     fn default() -> Self {
         CanvasState {
             textures: HashMap::new(),
+            mirror_textures: HashMap::new(),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
@@ -626,6 +630,92 @@ impl PageKeys {
     }
 }
 
+/// How far a pinch moves the bilingual blend: one that doubles the zoom blends about 80%.
+const PINCH_BLEND: f32 = 1.15;
+
+/// View › Bilingual: turn this frame's trackpad pinch into the translation blend (fingers apart
+/// show more of the translation). True when there was a pinch: the page doesn't zoom for it.
+fn bilingual_pinch(app: &mut WordApp, ui: &Ui) -> bool {
+    let pinch: f32 = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Zoom(f) if f.is_finite() && *f > 0.0 => Some(*f),
+                _ => None,
+            })
+            .product()
+    });
+    if !pinch.is_finite() || (pinch - 1.0).abs() < 1e-4 {
+        return false;
+    }
+    let mix = (app.session.view.bilingual_mix + pinch.ln() * PINCH_BLEND).clamp(0.0, 1.0);
+    let _ = app.run("bilingual.mix", json!({"value": mix}));
+    true
+}
+
+/// Whether Option (Alt) is held by itself over the focused document: the bilingual view shows
+/// the other language while it is. Option with a letter (typing an accent) or with the mouse
+/// (column selection) doesn't count.
+fn flip_held(app: &mut WordApp, ctx: &egui::Context) -> bool {
+    if !app.canvas.focused {
+        return false;
+    }
+    let held = ctx.input(|i| {
+        let m = i.modifiers;
+        m.alt
+            && !(m.command || m.ctrl || m.shift || m.mac_cmd)
+            && i.keys_down.iter().all(|k| matches!(k, egui::Key::AltLeft | egui::Key::AltRight))
+            && !i.pointer.any_down()
+    });
+    if held {
+        // Letting go after a flip doesn't show KeyTips (Windows, Linux).
+        app.ui.alt_chord_used = true;
+    }
+    held
+}
+
+/// The translation's share of the page this frame: the blend, or while Option is held the
+/// other language whole; eased between the two.
+fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
+    let mix = app.session.view.bilingual_mix.clamp(0.0, 1.0);
+    let target = match (on, flip_held(app, ctx)) {
+        (false, _) => 0.0,
+        (true, true) if mix < 0.5 => 1.0,
+        (true, true) => 0.0,
+        (true, false) => mix,
+    };
+    let secs = if app.animations_on() { 0.12 } else { 0.0 };
+    ctx.animate_value_with_time(egui::Id::new("bilingual-blend"), target, secs)
+}
+
+/// View › Bilingual: the blend slider at the foot of the document, and how to flip and pinch.
+fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, has_pairs: bool, t: &Tokens) {
+    let flip = if cfg!(target_os = "macos") { "Hold ⌥ to flip · pinch to blend" } else { "Hold Alt to flip · pinch to blend" };
+    egui::Area::new(egui::Id::new("bilingual-chip"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos2(area.center().x, area.max.y - 10.0))
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if !has_pairs {
+                        ui.label(egui::RichText::new(tl!("No translations yet: View › Bilingual › Add Translation")).color(t.text_dim));
+                        return;
+                    }
+                    ui.label(tl!("Text"));
+                    ui.spacing_mut().slider_width = 180.0;
+                    let mut mix = app.session.view.bilingual_mix;
+                    if ui.add(egui::Slider::new(&mut mix, 0.0..=1.0).show_value(false)).changed() {
+                        let _ = app.run("bilingual.mix", json!({"value": mix}));
+                    }
+                    ui.label(tl!("Translation"));
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(tl!(flip)).small().color(t.text_dim));
+                });
+            });
+        });
+}
+
 /// The texture cache key of page `i`: its content, the view, and the raster scale.
 fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -750,11 +840,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let animate = app.animations_on();
     let opts = ui.ctx().options(|o| o.input_options);
     let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate));
-    if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
+    // View › Bilingual: a trackpad pinch blends the translation in (fingers apart) or out
+    // instead of zooming; Ctrl/⌘ + wheel still zooms.
+    let mirror = app.session.bilingual_mirror();
+    let pinched = mirror.is_some() && ui.rect_contains_pointer(area) && bilingual_pinch(app, ui);
+    if !pinched && (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
         let reading = app.session.view.read_mode;
         let pct = (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if reading { 75.0 } else { 10.0 }, if reading { 150.0 } else { 500.0 });
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
         let _ = app.run(id, json!({"value": pct}));
+    }
+    if app.session.view.bilingual && !app.session.view.read_mode {
+        bilingual_chip(app, ui.ctx(), area, mirror.is_some(), &t);
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
     let geo = geometry(app, &layout, avail);
@@ -912,6 +1009,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let mut rects = Vec::with_capacity(geo.rects.len());
         let content_origin = ui.min_rect().min;
         let view = view_key(app, dim_body);
+        let blend = bilingual_blend(app, ui.ctx(), mirror.is_some());
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             let Some(page) = layout.pages.get(i) else { continue };
@@ -926,7 +1024,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
             // Render before placing the page: a page re-rendered in this frame (a zoom step, an
             // edit) then sits on the pixel grid in this frame too, rather than a frame later.
-            if visible && !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+            let render_opts = |app: &WordApp| {
                 let mut opts = screen_render_options();
                 opts.display.marks = app.session.view.marks;
                 opts.display.always = app.session.prefs.marks;
@@ -939,6 +1037,34 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 opts.dark_paper = dark_paper;
                 opts.display.dim_header = !dim_body;
                 opts.display.dim_body = dim_body;
+                opts
+            };
+            // The mirror page, ready before it is needed so holding Option flips at once.
+            if visible
+                && let Some(m) = &mirror
+                && let Some(mpage) = m.layout.pages.get(i)
+            {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (view, scale_px.to_bits(), page_content_key(mpage)).hash(&mut h);
+                let mkey = h.finish();
+                if !app.canvas.mirror_textures.get(&i).is_some_and(|(k, _)| *k == mkey) && rendered < 4 {
+                    let img = wordcraft_render::render_page(&m.doc, mpage, scale_px, &render_opts(app));
+                    let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
+                    match app.canvas.mirror_textures.get_mut(&i) {
+                        Some((k, tex)) => {
+                            tex.set(ci, egui::TextureOptions::LINEAR);
+                            *k = mkey;
+                        }
+                        None => {
+                            let tex = ui.ctx().load_texture(format!("mirror{i}"), ci, egui::TextureOptions::LINEAR);
+                            app.canvas.mirror_textures.insert(i, (mkey, tex));
+                        }
+                    }
+                    rendered += 1;
+                }
+            }
+            if visible && !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+                let opts = render_opts(app);
                 let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
                 let px = img.to_straight();
                 let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px);
@@ -978,6 +1104,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             painter.rect_filled(visual_sr, 0.0, if dark_page { Color32::from_gray(dark_paper) } else { Color32::WHITE });
             if let Some((_, tex)) = app.canvas.textures.get(&i) {
                 painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            // The translation laid over the text, as much as the blend says (both pages are
+            // opaque paper, so this crossfades the two).
+            if blend > 0.003
+                && mirror.is_some()
+                && let Some((_, tex)) = app.canvas.mirror_textures.get(&i)
+            {
+                painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(blend));
             }
             let page_scale = page_screen_scale(visual_sr, page, geo.scale);
             // Header/footer editing chrome.
@@ -1052,6 +1186,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let clip = ui.clip_rect();
         let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
         app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        if mirror.is_none() {
+            app.canvas.mirror_textures.clear();
+        } else {
+            app.canvas
+                .mirror_textures
+                .retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        }
         app.canvas.page_rects = rects.clone();
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
         // Find › Reading Highlight.

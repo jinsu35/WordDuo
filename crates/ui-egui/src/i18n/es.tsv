@@ -2441,3 +2441,16 @@ preview	Title	Título
 	Start-up	Inicio de la aplicación
 	Show the Start screen when WordCraft starts	Mostrar la pantalla de inicio al abrir WordCraft
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Activado: WordCraft se abre en Archivo › Inicio, con un documento en blanco, las plantillas y tus documentos recientes. Desactivado: abre un documento en blanco.
+	Bilingual	Bilingüe
+	Bilingual\nView	Vista\nbilingüe
+	Bilingual View	Vista bilingüe
+	Translation Blend	Fundido de traducción
+	Edit Translations	Editar traducciones
+	Add Translation	Agregar traducción
+	Pair Paragraphs	Emparejar párrafos
+	Swap Languages	Intercambiar idiomas
+	List Translations	Listar traducciones
+	Translation	Traducción
+	Hold ⌥ to flip · pinch to blend	Mantenga ⌥ para alternar · pellizque para fundir
+	Hold Alt to flip · pinch to blend	Mantenga Alt para alternar · pellizque para fundir
+	No translations yet: View › Bilingual › Add Translation	Aún no hay traducciones: Vista › Bilingüe › Agregar traducción

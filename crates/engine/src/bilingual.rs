@@ -1,0 +1,211 @@
+//! Bilingual documents, for translators and interpreters (Korean ↔ English and any other pair).
+//!
+//! A paragraph carries its translation in the paragraph right after it, set in the hidden
+//! [`STYLE`] paragraph style. The translation travels with the document (in .docx it is a hidden
+//! paragraph Word keeps and can show), prints nowhere and takes no room on the page.
+//!
+//! The bilingual view lays out a second, *mirror* document in which every paired paragraph shows
+//! its translation instead (keeping the source paragraph's formatting), and pads the shorter
+//! language of each pair ([`wordcraft_layout::LayoutOptions::pad_after`]) so both documents
+//! paginate alike: each paragraph and its translation then sit in the same place on the same
+//! page, and the editor can flip between them or blend one over the other.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use wordcraft_doc::para::{Paragraph, next_rev};
+use wordcraft_doc::props::{CharProps, Rgb, TextColor};
+use wordcraft_doc::styles::{Style, StyleKind};
+use wordcraft_doc::{Block, Document, Path, StoryRef};
+use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Placed};
+
+/// The paragraph style that marks a translation.
+pub const STYLE: &str = "Translation";
+
+/// Add the [`STYLE`] style to `doc` when it hasn't one: hidden text, in a colour that tells the
+/// translation apart while it is shown for editing.
+pub fn ensure_style(doc: &mut Document) {
+    if doc.styles.get(STYLE).is_none() {
+        doc.styles.styles.push(Style {
+            id: STYLE.into(),
+            name: "Translation".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Normal".into()),
+            next: Some("Normal".into()),
+            chr: CharProps { hidden: Some(true), color: Some(TextColor::Rgb(Rgb(0x1F, 0x5F, 0x8B))), ..Default::default() },
+            priority: Some(99),
+            ..Default::default()
+        });
+    }
+}
+
+/// Whether `p` is a translation (set in the [`STYLE`] style).
+pub fn is_translation(p: &Paragraph) -> bool {
+    p.props.style.as_deref() == Some(STYLE)
+}
+
+fn body_para(doc: &Document, block: usize) -> Option<&Paragraph> {
+    doc.body.get(block)?.as_para()
+}
+
+/// The translation of the body paragraph at `block`: the translation paragraph right after it.
+pub fn translation_of(doc: &Document, block: usize) -> Option<usize> {
+    let p = body_para(doc, block)?;
+    let next = block.checked_add(1)?;
+    (!is_translation(p) && body_para(doc, next).is_some_and(is_translation)).then_some(next)
+}
+
+/// The source paragraph of the translation at `block`.
+pub fn source_of(doc: &Document, block: usize) -> Option<usize> {
+    let prev = block.checked_sub(1)?;
+    (body_para(doc, block).is_some_and(is_translation) && translation_of(doc, prev) == Some(block)).then_some(prev)
+}
+
+/// Every (source, translation) pair of top-level body paragraphs, by block index, in order.
+pub fn pairs(doc: &Document) -> Vec<(usize, usize)> {
+    (0..doc.body.len()).filter_map(|b| translation_of(doc, b).map(|t| (b, t))).collect()
+}
+
+/// Whether `text` is mostly Hangul (Korean): more Hangul letters than Latin ones.
+pub fn is_korean(text: &str) -> bool {
+    let (mut hangul, mut latin) = (0usize, 0usize);
+    for c in text.chars() {
+        match c {
+            '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' => hangul += 1,
+            c if c.is_ascii_alphabetic() => latin += 1,
+            _ => {}
+        }
+    }
+    hangul > latin
+}
+
+/// The language tag a translation of `source` is written in: English for Korean, else Korean.
+pub fn translation_lang(source: &str) -> &'static str {
+    if is_korean(source) { "en-US" } else { "ko-KR" }
+}
+
+/// `source`'s place filled with `tr`'s text: the text, runs and inline objects of the
+/// translation, shown (not hidden), with the source paragraph's formatting. Text with no colour
+/// of its own takes the translation style's (`tint`), so blended over the source it stands apart.
+fn shown_translation(source: &Paragraph, tr: &Paragraph, rev: u64, tint: Option<TextColor>) -> Paragraph {
+    let mut p = source.clone();
+    p.text = tr.text.clone();
+    p.objects = tr.objects.clone();
+    p.runs = tr.runs.clone();
+    for r in &mut p.runs {
+        r.props.hidden = None;
+        if r.props.color.is_none() {
+            r.props.color = tint;
+        }
+    }
+    p.mark.hidden = None;
+    p.rev = rev;
+    p
+}
+
+/// Revisions of mirror paragraphs, kept from one mirror to the next so unchanged pairs hit the
+/// layout cache: (source rev, translation rev) → mirror paragraph rev.
+#[derive(Default)]
+pub struct MirrorRevs(HashMap<(u64, u64), u64>);
+
+/// The mirror of `doc`: each paired source paragraph shows its translation instead. The block
+/// structure is unchanged (the translations stay, hidden), so paths mean the same in both.
+pub fn mirror(doc: &Document, revs: &mut MirrorRevs) -> Document {
+    let mut m = doc.clone();
+    let mut kept = HashMap::new();
+    let tint = doc.styles.get(STYLE).and_then(|st| st.chr.color);
+    for (s, t) in pairs(doc) {
+        let (Some(src), Some(tr)) = (body_para(doc, s), body_para(doc, t)) else { continue };
+        let key = (src.rev, tr.rev);
+        let rev = revs.0.get(&key).copied().unwrap_or_else(next_rev);
+        kept.insert(key, rev);
+        if let Some(slot) = m.body.get_mut(s) {
+            *slot = Arc::new(Block::Para(shown_translation(src, tr, rev, tint)));
+        }
+    }
+    revs.0 = kept;
+    m
+}
+
+/// The height of each top-level body paragraph's lines in `layout` (points; spacing left out),
+/// summed over the pieces it was split into.
+pub fn heights(layout: &DocLayout) -> HashMap<usize, f32> {
+    let mut out = HashMap::new();
+    for ((story, path), pieces) in &layout.index {
+        if *story != StoryRef::Body || path.0.len() != 1 {
+            continue;
+        }
+        let mut h = 0.0;
+        for (page, item) in pieces {
+            if let Some(Placed::Lines { para, l0, l1, .. }) = layout.pages.get(*page).and_then(|p| p.items.get(*item)) {
+                h += para.lines.get(*l0..*l1).map(|ls| ls.iter().filter(|l| !l.beside).map(|l| l.height).sum::<f32>()).unwrap_or(0.0);
+            }
+        }
+        out.insert(path.last(), h);
+    }
+    out
+}
+
+/// Padding that evens out each pair: (after the primary's source paragraphs, after the mirror's).
+pub fn pads(pairs: &[(usize, usize)], primary: &DocLayout, mirror: &DocLayout) -> (HashMap<usize, f32>, HashMap<usize, f32>) {
+    let (hp, hm) = (heights(primary), heights(mirror));
+    let (mut pp, mut pm) = (HashMap::new(), HashMap::new());
+    for (s, _) in pairs {
+        let (a, b) = (hp.get(s).copied().unwrap_or(0.0), hm.get(s).copied().unwrap_or(0.0));
+        if b > a + 0.01 {
+            pp.insert(*s, b - a);
+        } else if a > b + 0.01 {
+            pm.insert(*s, a - b);
+        }
+    }
+    (pp, pm)
+}
+
+/// The mirror document and its layout, padded to match the primary layout.
+#[derive(Clone)]
+pub struct MirrorView {
+    pub doc: Arc<Document>,
+    pub layout: Arc<DocLayout>,
+}
+
+/// A top-level body path, or `None` for paragraphs elsewhere (tables, headers, notes…).
+pub fn top_block(story: StoryRef, path: &Path) -> Option<usize> {
+    (story == StoryRef::Body && path.0.len() == 1).then(|| path.last())
+}
+
+/// The session's bilingual view state.
+#[derive(Default)]
+pub(crate) struct BiState {
+    /// Whether the current layout was made for the bilingual view.
+    pub on: bool,
+    pub view: Option<MirrorView>,
+    cache: LayoutCache,
+    revs: MirrorRevs,
+}
+
+impl BiState {
+    /// Lay out the mirror of `doc` and pad both it and `primary` (laid out with `opts`, unpadded)
+    /// so they paginate alike; the padded primary layout is returned, the mirror kept in `view`.
+    /// Without translations `primary` comes back as it is.
+    pub fn lay_out(&mut self, doc: &Document, cache: &mut LayoutCache, opts: LayoutOptions, primary: Arc<DocLayout>) -> Arc<DocLayout> {
+        let pairs = pairs(doc);
+        if pairs.is_empty() {
+            return primary;
+        }
+        let m = mirror(doc, &mut self.revs);
+        let unpadded = wordcraft_layout::layout(&m, &mut self.cache, &opts);
+        let (pp, pm) = pads(&pairs, &primary, &unpadded);
+        let mirror_layout = if pm.is_empty() {
+            unpadded
+        } else {
+            wordcraft_layout::layout(&m, &mut self.cache, &LayoutOptions { pad_after: Some(Arc::new(pm)), ..opts.clone() })
+        };
+        let primary = if pp.is_empty() {
+            primary
+        } else {
+            Arc::new(wordcraft_layout::layout(doc, cache, &LayoutOptions { pad_after: Some(Arc::new(pp)), ..opts }))
+        };
+        self.view = Some(MirrorView { doc: Arc::new(m), layout: Arc::new(mirror_layout) });
+        primary
+    }
+}

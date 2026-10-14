@@ -2085,3 +2085,16 @@
 	Start-up	Pokretanje
 	Show the Start screen when WordCraft starts	Prikaži početni ekran pri pokretanju programa WordCraft
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Uključeno: WordCraft se otvara na Fajl › Početak, sa praznim dokumentom, šablonima i nedavnim dokumentima. Isključeno: otvara prazan dokument.
+	Bilingual	Dvojezično
+	Bilingual\nView	Dvojezični\nprikaz
+	Bilingual View	Dvojezični prikaz
+	Translation Blend	Pretapanje prevoda
+	Edit Translations	Uredi prevode
+	Add Translation	Dodaj prevod
+	Pair Paragraphs	Upari pasuse
+	Swap Languages	Zameni jezike
+	List Translations	Spisak prevoda
+	Translation	Prevod
+	Hold ⌥ to flip · pinch to blend	Držite ⌥ za prebacivanje · štipnite za pretapanje
+	Hold Alt to flip · pinch to blend	Držite Alt za prebacivanje · štipnite za pretapanje
+	No translations yet: View › Bilingual › Add Translation	Još nema prevoda: Prikaz › Dvojezično › Dodaj prevod

@@ -967,6 +967,34 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // View › Bilingual: two pages, one laid over the other.
+        "bilingual" => {
+            pen.page(2.5, 2.0, 12.5, 15.0);
+            pen.lines(4.5, 10.5, &[6.0, 9.0, 12.0]);
+            pen.rect(7.5, 5.0, 17.5, 18.0, a);
+            pen.line_c(&[(9.5, 14.5), (15.5, 14.5)], a);
+        }
+        "addTranslation" => {
+            pen.lines(3.0, 13.0, &[4.0, 10.0]);
+            pen.line_c(&[(3.0, 7.0), (11.0, 7.0)], a);
+            pen.line_c(&[(14.0, 15.0), (19.0, 15.0)], a);
+            pen.line_c(&[(16.5, 12.5), (16.5, 17.5)], a);
+        }
+        "editTranslations" => {
+            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
+            pen.line_c(&[(5.0, 7.0), (15.0, 7.0)], a);
+            pen.line_c(&[(5.0, 13.0), (15.0, 13.0)], a);
+        }
+        "pairParagraphs" => {
+            pen.lines(6.0, 17.0, &[5.0, 15.0]);
+            pen.line_c(&[(3.5, 5.0), (2.5, 6.0), (2.5, 14.0), (3.5, 15.0)], a);
+        }
+        "swapLanguages" => {
+            pen.line(&[(3.0, 7.0), (16.0, 7.0)]);
+            pen.line(&[(13.0, 4.0), (16.0, 7.0), (13.0, 10.0)]);
+            pen.line_c(&[(17.0, 13.0), (4.0, 13.0)], a);
+            pen.line_c(&[(7.0, 10.0), (4.0, 13.0), (7.0, 16.0)], a);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);

@@ -2076,3 +2076,16 @@
 	Start-up	啟動
 	Show the Start screen when WordCraft starts	啟動 WordCraft 時顯示開始畫面
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	開：WordCraft 開啟時顯示「檔案 › 常用」，其中有空白文件、範本和最近使用的文件。關：直接開啟空白文件。
+	Bilingual	雙語
+	Bilingual\nView	雙語\n檢視
+	Bilingual View	雙語檢視
+	Translation Blend	譯文混合
+	Edit Translations	編輯譯文
+	Add Translation	新增譯文
+	Pair Paragraphs	配對段落
+	Swap Languages	交換語言
+	List Translations	列出譯文
+	Translation	譯文
+	Hold ⌥ to flip · pinch to blend	按住 ⌥ 切換 · 雙指捏合以混合
+	Hold Alt to flip · pinch to blend	按住 Alt 切換 · 雙指捏合以混合
+	No translations yet: View › Bilingual › Add Translation	尚無譯文: 檢視 › 雙語 › 新增譯文

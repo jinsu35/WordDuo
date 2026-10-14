@@ -168,6 +168,10 @@ pub struct LayoutOptions {
     pub outline: Option<outline::OutlineView>,
     /// What the spelling check skips, and whether grammar is marked too (File › Options › Proofing).
     pub proof: ProofOptions,
+    /// Extra room after top-level body paragraphs, by block index (points). The bilingual view
+    /// pads the shorter language of each paragraph pair so both languages paginate alike. It is
+    /// added after the paragraph's space after and never merges with the next one's space before.
+    pub pad_after: Option<Arc<HashMap<usize, f32>>>,
 }
 
 /// File › Options › Proofing choices that change the squiggles.
@@ -2662,10 +2666,25 @@ fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32
     notes
 }
 
+/// Whether the body paragraph `p` is hidden whole, its text and its paragraph mark, while hidden
+/// text isn't shown: it takes no room, as in Word (a bilingual document's translations,
+/// [`LayoutOptions::pad_after`]). One carrying a section break keeps its place.
+fn hidden_whole(ctx: &Ctx, p: &Paragraph) -> bool {
+    if ctx.opts.show_hidden || p.section.is_some() {
+        return false;
+    }
+    let style = p.props.style.as_deref();
+    let hidden = |c: &CharProps| ctx.doc.styles.resolve_char_in(style, None, c).hidden;
+    hidden(&p.mark) && p.run_ranges().all(|(_, c)| hidden(c)) && p.runs.iter().map(|r| r.len).sum::<usize>() >= p.text.len()
+}
+
 /// Place a body paragraph. An empty paragraph that only carries a section break before a
 /// continuous section takes no room (Word for Windows: the text after it follows right on, and
 /// columns balanced above it don't count it).
 fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    if hidden_whole(ctx, p) {
+        return;
+    }
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         // Its (empty) line stays where the text ended, even at the bottom of a full column.
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
@@ -2986,8 +3005,16 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         }
     }
     pb.y += pl.rp.space_after;
+    if let Some(pad) = ctx.opts.pad_after.as_ref().and_then(|m| m.get(&block))
+        && pad.is_finite()
+    {
+        pb.y += pad.clamp(0.0, MAX_PAD_AFTER);
+    }
     pb.prev = Some((pl.rp.style.clone(), pl.rp.contextual_spacing, pl.rp.space_after, pl.rp.after_auto, label.is_some()));
 }
+
+/// The most [`LayoutOptions::pad_after`] adds after one paragraph (points; a tall page).
+const MAX_PAD_AFTER: f32 = 2000.0;
 
 /// The outline of the body for an Outline view pass.
 struct OutlinePass {

@@ -6,6 +6,7 @@
 //! CLI, the JSON control channel and the MCP server all call [`Session::run`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bilingual;
 pub mod catalog;
 pub mod cmd;
 pub mod file_access;
@@ -168,6 +169,8 @@ pub mod p {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_bilingual;
 #[cfg(test)]
 mod tests_fonts;
 #[cfg(test)]

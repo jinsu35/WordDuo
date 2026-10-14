@@ -180,6 +180,17 @@ pub struct ViewState {
     /// Developer › Design Mode: every content control shows its frame and title.
     #[serde(default)]
     pub design_mode: bool,
+    /// View › Bilingual: lay out each paragraph's translation in the same place as the paragraph,
+    /// so the editor can flip to it or blend it in (see [`crate::bilingual`]).
+    #[serde(default)]
+    pub bilingual: bool,
+    /// How much of the translation the bilingual view blends over the text: 0 (the text alone) to
+    /// 1 (the translation alone).
+    #[serde(default)]
+    pub bilingual_mix: f32,
+    /// Show the translations under their paragraphs, for editing them (hidden text shown).
+    #[serde(default)]
+    pub bilingual_edit: bool,
 }
 
 fn on() -> bool {
@@ -237,6 +248,9 @@ impl Default for ViewState {
             hide_white_space: false,
             outline: Default::default(),
             design_mode: false,
+            bilingual: false,
+            bilingual_mix: 0.0,
+            bilingual_edit: false,
         }
     }
 }
@@ -384,6 +398,8 @@ pub struct Session {
         (bool, bool),
         NumeralMode,
     )>,
+    /// The bilingual view's mirror document and its layout cache.
+    bi: crate::bilingual::BiState,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
     /// Last mutating command (Repeat).
@@ -592,6 +608,7 @@ impl Session {
             document_id: 1,
             cache: LayoutCache::new(),
             layout: None,
+            bi: Default::default(),
             originals: Default::default(),
             last_command: None,
             recording: None,
@@ -735,7 +752,10 @@ impl Session {
         let hide_deleted = !self.view.show_markup || self.prefs.markup.hides_deletions();
         let deleted = (hide_deleted, self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
+        let show_hidden = self.view.marks || self.prefs.marks.hidden || self.view.bilingual_edit;
+        let bilingual = self.view.bilingual && !show_hidden && mode != ViewMode::Outline;
         if let Some((r, w, h, m, sp, l, pf, o, hd, n)) = &self.layout
+            && self.bi.on == bilingual
             && *r == self.rev
             && (*w == width || mode == ViewMode::Print)
             && *h == height
@@ -753,7 +773,7 @@ impl Session {
             web_width: width,
             read_height: height,
             read_line_spacing: spacing.map(f32::from_bits),
-            show_hidden: self.view.marks || self.prefs.marks.hidden,
+            show_hidden,
             hide_deleted,
             deletions_in_balloons: deleted.1,
             proofing: self.view.proofing,
@@ -762,8 +782,14 @@ impl Session {
             field_codes: self.view.field_codes,
             outline: outline.clone(),
             proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            pad_after: None,
         };
-        let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
+        let mut l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
+        self.bi.on = bilingual;
+        self.bi.view = None;
+        if bilingual {
+            l = self.bi.lay_out(&self.doc, &mut self.cache, opts, l);
+        }
         self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral));
         l
     }
@@ -783,6 +809,15 @@ impl Session {
     pub fn relayout(&mut self) {
         self.layout = None;
         self.cache.clear();
+        self.bi = Default::default();
+    }
+
+    /// The bilingual view's mirror: the document with each paragraph showing its translation,
+    /// laid out to match [`Session::layout`] page for page. `None` when the view is off or the
+    /// document has no translations.
+    pub fn bilingual_mirror(&mut self) -> Option<crate::bilingual::MirrorView> {
+        self.layout();
+        self.bi.view.clone()
     }
 
     /// Set the language new documents are written in ([`Session::editing_lang`]; `None` or a
@@ -1022,6 +1057,7 @@ impl Session {
             rev: _,
             cache: _,
             layout: _,
+            bi: _,
             originals: _,
             last_command: _,
             recording: _,

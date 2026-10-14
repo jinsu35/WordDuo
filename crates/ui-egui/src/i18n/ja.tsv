@@ -2075,3 +2075,16 @@
 	Start-up	起動
 	Show the Start screen when WordCraft starts	WordCraft の起動時にスタート画面を表示する
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	オン: WordCraft は [ファイル] › [ホーム] で開き、白紙の文書、テンプレート、最近使った文書を表示します。オフ: 白紙の文書を開きます。
+	Bilingual	対訳
+	Bilingual\nView	対訳\n表示
+	Bilingual View	対訳表示
+	Translation Blend	訳文のブレンド
+	Edit Translations	訳文の編集
+	Add Translation	訳文の追加
+	Pair Paragraphs	段落をペアにする
+	Swap Languages	言語の入れ替え
+	List Translations	訳文の一覧
+	Translation	訳文
+	Hold ⌥ to flip · pinch to blend	⌥ を押している間切り替え · ピンチでブレンド
+	Hold Alt to flip · pinch to blend	Alt を押している間切り替え · ピンチでブレンド
+	No translations yet: View › Bilingual › Add Translation	訳文はまだありません: 表示 › 対訳 › 訳文の追加
