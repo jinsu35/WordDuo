@@ -203,8 +203,33 @@ pub(crate) fn finish_preedit(app: &mut WordApp, ctx: &egui::Context) {
     }
     let command = if app.session.math.is_some() { "equation.type" } else { "text.insert" };
     if app.run(command, json!({"text": app.canvas.ime_preedit})).is_ok() {
-        app.canvas.ime_preedit.clear();
+        app.canvas.ime_finished = Some(std::mem::take(&mut app.canvas.ime_preedit));
         app.canvas.ime_interrupt_frame = Some(ctx.cumulative_frame_nr());
+    }
+}
+
+/// What of the input method's `text` to insert. A composition finished by the app (a click, a
+/// caret move, a language switch) can stay in the system's input method, which commits it again
+/// with the next key, at the insertion point by then: a Korean syllable typed on the Korean page
+/// turned up on the English one after a click there. That repeat, sent before any new
+/// composition, is dropped (and anything after it, such as a space, kept).
+pub(crate) fn native_commit<'a>(app: &mut WordApp, text: &'a str) -> &'a str {
+    match app.canvas.ime_finished.take() {
+        Some(done) if !done.is_empty() => match text.strip_prefix(done.as_str()) {
+            Some(rest) => {
+                log::trace!(target: "wordcraft_ui_egui::ime", "dropped the repeat of {done:?} finished here");
+                rest
+            }
+            None => text,
+        },
+        _ => text,
+    }
+}
+
+/// A new composition: whatever was finished before it is no longer pending in the input method.
+fn composing(app: &mut WordApp, text: &str) {
+    if !text.is_empty() {
+        app.canvas.ime_finished = None;
     }
 }
 
@@ -232,9 +257,13 @@ pub(crate) fn prepare_ime(app: &mut WordApp, ctx: &egui::Context) {
     });
     for event in events {
         match event {
-            egui::ImeEvent::Preedit { text, .. } => app.canvas.ime_preedit = text,
+            egui::ImeEvent::Preedit { text, .. } => {
+                composing(app, &text);
+                app.canvas.ime_preedit = text;
+            }
             egui::ImeEvent::Commit(text) => {
                 app.canvas.ime_preedit.clear();
+                let text = native_commit(app, &text);
                 if !text.is_empty() {
                     let command = if app.session.math.is_some() { "equation.type" } else { "text.insert" };
                     let _ = app.run(command, json!({"text": text}));
@@ -370,6 +399,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
                 egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                     app.canvas.ime_preedit.clear();
+                    let text = native_commit(app, text);
                     if !text.is_empty() {
                         let _ = app.run("equation.type", json!({"text": text}));
                     }
@@ -396,6 +426,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
             }
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                composing(app, &text);
                 app.canvas.ime_preedit = text;
                 // Events are handled after the canvas is painted. Show the new composition
                 // immediately, rather than waiting for the next caret-blink repaint.
@@ -404,6 +435,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                 app.canvas.ime_preedit.clear();
                 ctx.request_repaint();
+                let text = native_commit(app, &text);
                 if !text.is_empty() {
                     let _ = app.run("text.insert", json!({"text": text}));
                 }
@@ -682,6 +714,46 @@ mod tests {
             ],
         );
         assert_eq!(text(&app), "라");
+    }
+
+    /// The user's report: "오" composed on the Korean page, then a click on the English page
+    /// while peeking. The click finishes "오" there; the input method, still holding it, sends it
+    /// again with the next key, which must not type it on the English page.
+    #[test]
+    fn a_syllable_finished_by_a_click_is_not_typed_again_where_the_click_went() {
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.canvas.focused = true;
+        ime_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("오호 ".into())), preedit("오")]);
+        let press =
+            egui::Event::PointerButton { pos: egui::Pos2::ZERO, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+        ime_frame(&mut app, &ctx, vec![press]);
+        assert_eq!(text(&app), "오호 오");
+        // The click put the insertion point at the start.
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        ime_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("오".into())), egui::Event::Text("w".into())]);
+        assert_eq!(text(&app), "w오호 오", "the repeat isn't typed; the key after it is");
+        // With a space after it, the space is kept.
+        ime_frame(&mut app, &ctx, vec![preedit("가")]);
+        ime_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: egui::Pos2::ZERO,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        ime_frame(&mut app, &ctx, vec![preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("가 ".into()))]);
+        assert_eq!(text(&app), " w가오호 오");
+        // A new syllable composed after it is typed, even the same one.
+        ime_frame(&mut app, &ctx, vec![preedit("나")]);
+        ime_frame(&mut app, &ctx, vec![key(Key::ArrowLeft)]);
+        ime_frame(&mut app, &ctx, vec![preedit("나")]);
+        ime_frame(&mut app, &ctx, vec![preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("나".into()))]);
+        assert_eq!(text(&app).matches('나').count(), 2, "{}", text(&app));
     }
 
     #[test]

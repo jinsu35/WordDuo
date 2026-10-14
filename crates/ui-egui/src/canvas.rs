@@ -87,6 +87,10 @@ pub struct CanvasState {
     pub ime_preedit: String,
     /// A caret move finishes the composition and resets the native marked text in this frame.
     pub(crate) ime_interrupt_frame: Option<u64>,
+    /// A composition finished here rather than by the input method (a click, a caret move): the
+    /// system's input method may still hold it and send it again later, wherever the insertion
+    /// point is by then ([`crate::keys::native_commit`]).
+    pub(crate) ime_finished: Option<String>,
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
@@ -197,6 +201,7 @@ impl Default for CanvasState {
             render_ms: 0.0,
             ime_preedit: String::new(),
             ime_interrupt_frame: None,
+            ime_finished: None,
             ime_faces: Vec::new(),
             want_focus: true,
             context_issue: None,
