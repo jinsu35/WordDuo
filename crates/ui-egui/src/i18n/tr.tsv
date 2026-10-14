@@ -2486,3 +2486,9 @@ preview	Title	Örnek
 	Switch Language	Dili Değiştir
 	Tap ⌥ to switch · hold to peek · twist two fingers to blend	Değiştirmek için ⌥ tuşuna dokunun · bakmak için basılı tutun · karıştırmak için iki parmakla döndürün
 	Tap Ctrl to switch · hold to peek · twist two fingers to blend	Değiştirmek için Ctrl tuşuna dokunun · bakmak için basılı tutun · karıştırmak için iki parmakla döndürün
+	About WordDuo	WordDuo Hakkında
+	WordDuo	WordDuo
+	A Korean–English word processor for translators and interpreters.\nBased on WordCraft, the open-source word processor by the ArtCraft team.	A Korean–English word processor for translators and interpreters.\nBased on WordCraft, the open-source word processor by the ArtCraft team.
+	Source code: github.com/jinsu35/WordDuo	Source code: github.com/jinsu35/WordDuo
+	Based on: github.com/storytold/wordcraft	Based on: github.com/storytold/wordcraft
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors; WordDuo changes (c) 2026 jinsu kim.	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors; WordDuo changes (c) 2026 jinsu kim.
