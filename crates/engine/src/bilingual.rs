@@ -192,13 +192,15 @@ pub fn keep_pairs(before: &Document, doc: &mut Document, sel: &mut crate::Select
 /// paragraph in its place, to fill in), rather than showing in both. Paragraphs the edit left
 /// alone are left as they are.
 fn pair_new_paragraphs(before: &Document, doc: &mut Document, sel: &mut crate::Selection) -> bool {
-    let Some(lang) = pairs(before)
+    let all = pairs(before);
+    if all.is_empty() {
+        return false;
+    }
+    // The translations' language, when they are tagged with one (paired from plain text, not).
+    let lang = all
         .first()
         .and_then(|(_, t)| body_para(before, *t))
-        .and_then(|p| p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| p.mark.lang.clone()))
-    else {
-        return false;
-    };
+        .and_then(|p| p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| p.mark.lang.clone()));
     let mut added = false;
     let mut i = 0;
     while i < doc.body.len() {
@@ -207,7 +209,7 @@ fn pair_new_paragraphs(before: &Document, doc: &mut Document, sel: &mut crate::S
             && !before.body.iter().any(|b| doc.body.get(i).is_some_and(|x| Arc::ptr_eq(b, x)))
             && !body_para(doc, i).is_some_and(|p| p.section.is_some());
         if unpaired_new {
-            let tr = Paragraph::with_text("", CharProps { lang: Some(lang.clone()), ..Default::default() }).styled(STYLE);
+            let tr = Paragraph::with_text("", CharProps { lang: lang.clone(), ..Default::default() }).styled(STYLE);
             doc.body.insert(i + 1, Arc::new(Block::Para(tr)));
             for p in [&mut sel.anchor, &mut sel.focus] {
                 if p.story == StoryRef::Body

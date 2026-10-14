@@ -370,3 +370,24 @@ fn new_paragraphs_are_in_the_language_written_only() {
     let m = s.bilingual_mirror().unwrap();
     assert_eq!(primary.pages.len(), m.layout.pages.len());
 }
+
+/// The same with translations paired from plain text, which carry no language tag (the demo
+/// document): a new paragraph got no translation, so it showed, and was edited, on both pages.
+#[test]
+fn new_paragraphs_get_a_translation_without_a_language_tag_too() {
+    let mut s = Session::new(doc_of(&["Hello there.", "안녕하세요 여러분."]));
+    run(&mut s, "bilingual.pair", json!({}));
+    assert_eq!(pairs(&s.doc), vec![(0, 1)]);
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "Hello there.".len()));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Hello again."}));
+    assert_eq!(layout_of(&s).get(2), Some(&(false, "Hello again.".to_string())));
+    assert_eq!(layout_of(&s).get(3), Some(&(true, String::new())), "it has a translation of its own");
+    // Written over on the Korean page, the English stays.
+    run(&mut s, "bilingual.switch", json!({}));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+    run(&mut s, "text.insert", json!({"text": "다시 안녕."}));
+    run(&mut s, "bilingual.switch", json!({}));
+    assert_eq!(layout_of(&s).get(2), Some(&(false, "Hello again.".to_string())));
+    assert_eq!(layout_of(&s).get(3), Some(&(true, "다시 안녕.".to_string())));
+}
