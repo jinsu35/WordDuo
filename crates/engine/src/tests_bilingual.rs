@@ -293,23 +293,23 @@ fn a_split_paragraph_keeps_its_translation() {
         s
     };
     let t = |b: bool, x: &str| (b, x.to_string());
-    // Enter at the end, then a new sentence.
+    // Enter at the end, then a new sentence (which gets an empty translation of its own).
     let mut s = pair();
     s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "abc def.".len()));
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "text.insert", json!({"text": "New."}));
-    assert_eq!(layout_of(&s), vec![t(false, "abc def."), t(true, "가나다 라마."), t(false, "New."), t(false, "Next.")]);
+    assert_eq!(layout_of(&s), vec![t(false, "abc def."), t(true, "가나다 라마."), t(false, "New."), t(true, ""), t(false, "Next.")]);
     assert_eq!(s.sel.focus.path.0, vec![2], "the insertion point is in the new paragraph");
     // Enter in the middle: the first half keeps it.
     let mut s = pair();
     s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 4));
     run(&mut s, "text.newParagraph", json!({}));
-    assert_eq!(layout_of(&s), vec![t(false, "abc "), t(true, "가나다 라마."), t(false, "def."), t(false, "Next.")]);
+    assert_eq!(layout_of(&s), vec![t(false, "abc "), t(true, "가나다 라마."), t(false, "def."), t(true, ""), t(false, "Next.")]);
     // Enter at the start: the text moves down, and the translation with it.
     let mut s = pair();
     s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
     run(&mut s, "text.newParagraph", json!({}));
-    assert_eq!(layout_of(&s), vec![t(false, ""), t(false, "abc def."), t(true, "가나다 라마."), t(false, "Next.")]);
+    assert_eq!(layout_of(&s), vec![t(false, ""), t(true, ""), t(false, "abc def."), t(true, "가나다 라마."), t(false, "Next.")]);
     // Undo puts it back as it was.
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(layout_of(&s), vec![t(false, "abc def."), t(true, "가나다 라마."), t(false, "Next.")]);
@@ -334,8 +334,39 @@ fn copying_paragraphs_never_moves_or_makes_translations() {
     s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "One.".len()));
     run(&mut s, "edit.paste", json!({}));
     let l = layout_of(&s);
-    assert_eq!(l.iter().filter(|(tr, _)| *tr).count(), 2, "no new translation: {l:?}");
     assert_eq!(l.first(), Some(&(false, "One.둘.".to_string())), "{l:?}");
     assert_eq!(l.get(1), Some(&(true, "하나.".to_string())), "{l:?}");
-    assert_eq!(pairs(&s.doc).len(), 2, "{l:?}");
+    assert!(
+        l.iter().all(|(tr, x)| !tr || x.is_empty() || x == "하나." || x == "둘."),
+        "only the pasted paragraph's empty translations are new: {l:?}"
+    );
+    assert!(pairs(&s.doc).iter().any(|(_, t)| body_text(&s, *t) == "둘."), "{l:?}");
+}
+
+/// Paragraphs written in one language are in that language only: the user's report, Korean
+/// typed on new lines at the end showed on the English page too.
+#[test]
+fn new_paragraphs_are_in_the_language_written_only() {
+    let mut s = Session::new(doc_of(&["Hello."]));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "bilingual.translate", json!({"text": "안녕."}));
+    run(&mut s, "bilingual.switch", json!({}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "안녕.".len()));
+    for _ in 0..3 {
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "text.insert", json!({"text": "좋다"}));
+    let korean: Vec<String> =
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| !crate::bilingual::is_translation(p)).map(|p| p.plain_text()).collect();
+    assert!(korean.contains(&"좋다".to_string()));
+    run(&mut s, "bilingual.switch", json!({}));
+    let english: Vec<String> =
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| !crate::bilingual::is_translation(p)).map(|p| p.plain_text()).collect();
+    assert!(!english.iter().any(|t| t.contains("좋다")), "the English page doesn't show it: {english:?}");
+    assert_eq!(english.first().map(String::as_str), Some("Hello."));
+    // Both pages lay out alike: the new lines are empty lines on the English page.
+    let primary = s.layout();
+    let m = s.bilingual_mirror().unwrap();
+    assert_eq!(primary.pages.len(), m.layout.pages.len());
 }

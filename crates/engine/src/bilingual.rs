@@ -184,7 +184,46 @@ pub fn keep_pairs(before: &Document, doc: &mut Document, sel: &mut crate::Select
         }
         moved = true;
     }
-    moved
+    pair_new_paragraphs(before, doc, sel) || moved
+}
+
+/// In a document with translations, a paragraph an edit made or changed that has none gets an
+/// empty one: text written in one language is in that language only (the other shows an empty
+/// paragraph in its place, to fill in), rather than showing in both. Paragraphs the edit left
+/// alone are left as they are.
+fn pair_new_paragraphs(before: &Document, doc: &mut Document, sel: &mut crate::Selection) -> bool {
+    let Some(lang) = pairs(before)
+        .first()
+        .and_then(|(_, t)| body_para(before, *t))
+        .and_then(|p| p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| p.mark.lang.clone()))
+    else {
+        return false;
+    };
+    let mut added = false;
+    let mut i = 0;
+    while i < doc.body.len() {
+        let unpaired_new = body_para(doc, i).is_some_and(|p| !is_translation(p))
+            && translation_of(doc, i).is_none()
+            && !before.body.iter().any(|b| doc.body.get(i).is_some_and(|x| Arc::ptr_eq(b, x)))
+            && !body_para(doc, i).is_some_and(|p| p.section.is_some());
+        if unpaired_new {
+            let tr = Paragraph::with_text("", CharProps { lang: Some(lang.clone()), ..Default::default() }).styled(STYLE);
+            doc.body.insert(i + 1, Arc::new(Block::Para(tr)));
+            for p in [&mut sel.anchor, &mut sel.focus] {
+                if p.story == StoryRef::Body
+                    && let Some(k) = p.path.0.first_mut()
+                    && *k as usize > i
+                {
+                    *k += 1;
+                }
+            }
+            added = true;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    added
 }
 
 /// What a copy holds of `frag`, copied from a document whose translations are hidden: no
