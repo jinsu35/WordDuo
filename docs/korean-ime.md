@@ -2,6 +2,9 @@
 
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (split app-side fixes from native winit changes)
 
+This document describes the no-vendor split #1127. On the combined #862 branch,
+see [deferred native patches](korean-ime-native.md) for its additional override.
+
 ## Scope and deferred native fixes
 
 This change splits the Korean interface catalog and app-side IME handling from
@@ -72,3 +75,9 @@ screenshots are not committed.
 | Date | Change | Detail |
 |---|---|---|
 | 2026-10-13 | minor | Latest-main sync; app-side/catalog split without vendor; native retry and space guard explicitly deferred to #862 |
+
+## Combined native branch
+
+On the deferred #862 branch only, native patches and their earlier validation
+are preserved in [korean-ime-native.md](korean-ime-native.md). #1127 has no native
+dependency override.
