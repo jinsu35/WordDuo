@@ -657,13 +657,21 @@ const TWIST_BLEND: f32 = 1.65;
 const SWITCH_MARGIN: f32 = 0.05;
 /// View › Bilingual: set the blend (0: the text the document opened with, 1: its translation),
 /// switching the language worked in when it passes the middle.
-fn set_bilingual_blend(app: &mut WordApp, blend: f32) {
+fn set_bilingual_blend(app: &mut WordApp, ctx: &egui::Context, blend: f32) {
     let blend = blend.clamp(0.0, 1.0);
     let _ = app.run("bilingual.mix", json!({"value": blend}));
     let flipped = app.session.view.bilingual_flipped;
     if (!flipped && blend > 0.5 + SWITCH_MARGIN) || (flipped && blend < 0.5 - SWITCH_MARGIN) {
-        let _ = app.run("bilingual.switch", json!({"value": !flipped, "keepBlend": true}));
+        switch_language(app, ctx, json!({"value": !flipped, "keepBlend": true}));
     }
+}
+
+/// View › Bilingual: switch the language worked in (`bilingual.switch` with `params`). A syllable
+/// still being composed is finished first, in the language it was typed in: left composing, it
+/// would be finished after the switch, in the other language's text.
+fn switch_language(app: &mut WordApp, ctx: &egui::Context, params: serde_json::Value) -> bool {
+    crate::keys::finish_preedit(app, ctx);
+    app.run("bilingual.switch", params).is_ok()
 }
 
 /// View › Bilingual: turn this frame's two-finger twist on the trackpad into the blend, like a
@@ -679,7 +687,7 @@ fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
             .sum()
     });
     if turn.is_finite() && turn.abs() >= 1e-4 {
-        set_bilingual_blend(app, app.session.view.bilingual_mix + turn * TWIST_BLEND);
+        set_bilingual_blend(app, ui.ctx(), app.session.view.bilingual_mix + turn * TWIST_BLEND);
     }
 }
 
@@ -750,7 +758,7 @@ fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
         (false, Some((t, c))) => {
             app.canvas.bi_key = None;
             if c && !other && now - t < PEEK_AFTER {
-                let _ = app.run("bilingual.switch", json!({}));
+                switch_language(app, ctx, json!({}));
             }
             false
         }
@@ -787,11 +795,11 @@ fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
 /// point is found in the other language's layout (laid out alike, and each paragraph there is
 /// its translation's text, so the offset is the translation's), then that language becomes the
 /// one worked in, with the insertion point there.
-fn peek_click(app: &mut WordApp, page: usize, x: f32, y: f32) {
+fn peek_click(app: &mut WordApp, ctx: &egui::Context, page: usize, x: f32, y: f32) {
     let Some(mirror) = app.session.bilingual_mirror() else { return };
     let Some(pos) = mirror.layout.hit(page, x, y, StoryRef::Body) else { return };
     let flipped = app.session.view.bilingual_flipped;
-    if app.run("bilingual.switch", json!({"value": !flipped})).is_err() {
+    if !switch_language(app, ctx, json!({"value": !flipped})) {
         return;
     }
     let _ = app.run("caret.set", json!({"pos": serde_json::to_value(&pos).unwrap_or_default()}));
@@ -858,7 +866,7 @@ fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens
                     ui.visuals_mut().widgets.inactive.bg_fill = t.border_strong;
                     let mut blend = app.session.view.bilingual_mix;
                     if ui.add(egui::Slider::new(&mut blend, 0.0..=1.0).show_value(false)).changed() {
-                        set_bilingual_blend(app, blend);
+                        set_bilingual_blend(app, ctx, blend);
                     }
                     ui.label(name(&right, flipped));
                     ui.add_space(8.0);
@@ -2056,7 +2064,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
         && let Some((page, x, y)) = page_at(rects, layout, scale, p)
     {
-        peek_click(app, page, x, y);
+        peek_click(app, ui.ctx(), page, x, y);
         return;
     }
     // A pen or the eraser (Draw tab) owns the pointer.
@@ -3057,6 +3065,34 @@ mod tests {
         assert!(!app.session.view.bilingual_flipped, "tapped back");
     }
 
+    /// The user's report: "금" still being composed on the Korean page, ⌥ tapped to switch, and
+    /// the syllable turned up on the English page. It is finished on the Korean page first.
+    #[test]
+    fn a_syllable_being_composed_stays_in_its_language_when_switching() {
+        let ctx = egui::Context::default();
+        let mut app = bilingual_app();
+        assert!(!key_frame(&mut app, &ctx, 1.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 1.1, false, vec![]));
+        assert!(app.session.view.bilingual_flipped, "working in Korean");
+        app.canvas.ime_preedit = "금".into();
+        assert!(!key_frame(&mut app, &ctx, 2.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 2.1, false, vec![]));
+        assert!(!app.session.view.bilingual_flipped, "switched to English");
+        assert!(app.canvas.ime_preedit.is_empty());
+        let english = app.session.doc.body[0].as_para().unwrap().plain_text();
+        assert_eq!(english, "Hello.", "nothing Korean on the English page");
+        let korean = app.session.doc.body[1].as_para().unwrap().plain_text();
+        assert!(korean.contains('금'), "finished on the Korean page: {korean}");
+        // The input method sending it again after the switch types nothing.
+        ctx.run_ui(egui::RawInput { events: vec![egui::Event::Ime(egui::ImeEvent::Commit("금".into()))], ..Default::default() }, |ui| {
+            app.canvas.focused = true;
+            crate::keys::canvas_events(&mut app, ui.ctx());
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "Hello.");
+    }
+
     #[test]
     fn a_click_while_peeking_works_there_in_the_language_peeked_at() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -3076,7 +3112,7 @@ mod tests {
         let third = "안녕하".len();
         let ci = para.clusters.iter().position(|c| c.start == third).unwrap();
         let cx = line_x + line.xs[ci - line.c0] + 0.5;
-        peek_click(&mut app, page, cx, line_y + line.height / 2.0);
+        peek_click(&mut app, &egui::Context::default(), page, cx, line_y + line.height / 2.0);
         assert!(app.session.view.bilingual_flipped, "working in Korean");
         assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "안녕하세요 거기.");
         assert_eq!((app.session.sel.focus.path.0.clone(), app.session.sel.focus.off), (vec![0], third));
