@@ -630,27 +630,28 @@ impl PageKeys {
     }
 }
 
-/// How far a pinch moves the bilingual blend: one that doubles the zoom blends about 80%.
-const PINCH_BLEND: f32 = 1.15;
+/// How far a two-finger twist moves the bilingual blend, per radian: a quarter turn
+/// (about 70°) goes from the text alone to the translation alone.
+const TWIST_BLEND: f32 = 0.8;
 
-/// View › Bilingual: turn this frame's trackpad pinch into the translation blend (fingers apart
-/// show more of the translation). True when there was a pinch: the page doesn't zoom for it.
-fn bilingual_pinch(app: &mut WordApp, ui: &Ui) -> bool {
-    let pinch: f32 = ui.input(|i| {
+/// View › Bilingual: turn this frame's two-finger twist on the trackpad into the translation
+/// blend, like a dial: clockwise shows more of the translation, anticlockwise more of the text.
+/// A pinch still zooms the page.
+fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
+    let turn: f32 = ui.input(|i| {
         i.events
             .iter()
             .filter_map(|e| match e {
-                egui::Event::Zoom(f) if f.is_finite() && *f > 0.0 => Some(*f),
+                egui::Event::Rotate(r) if r.is_finite() => Some(*r),
                 _ => None,
             })
-            .product()
+            .sum()
     });
-    if !pinch.is_finite() || (pinch - 1.0).abs() < 1e-4 {
-        return false;
+    if !turn.is_finite() || turn.abs() < 1e-4 {
+        return;
     }
-    let mix = (app.session.view.bilingual_mix + pinch.ln() * PINCH_BLEND).clamp(0.0, 1.0);
+    let mix = (app.session.view.bilingual_mix + turn * TWIST_BLEND).clamp(0.0, 1.0);
     let _ = app.run("bilingual.mix", json!({"value": mix}));
-    true
 }
 
 /// Whether Option (Alt) is held by itself over the focused document: the bilingual view shows
@@ -688,9 +689,10 @@ fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
     ctx.animate_value_with_time(egui::Id::new("bilingual-blend"), target, secs)
 }
 
-/// View › Bilingual: the blend slider at the foot of the document, and how to flip and pinch.
+/// View › Bilingual: the blend slider at the foot of the document, and how to flip and twist.
 fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, has_pairs: bool, t: &Tokens) {
-    let flip = if cfg!(target_os = "macos") { "Hold ⌥ to flip · pinch to blend" } else { "Hold Alt to flip · pinch to blend" };
+    let flip =
+        if cfg!(target_os = "macos") { "Hold ⌥ to flip · twist two fingers to blend" } else { "Hold Alt to flip · twist two fingers to blend" };
     egui::Area::new(egui::Id::new("bilingual-chip"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(area.center().x, area.max.y - 10.0))
@@ -840,11 +842,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let animate = app.animations_on();
     let opts = ui.ctx().options(|o| o.input_options);
     let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate));
-    // View › Bilingual: a trackpad pinch blends the translation in (fingers apart) or out
-    // instead of zooming; Ctrl/⌘ + wheel still zooms.
+    // View › Bilingual: twisting two fingers on the trackpad blends the translation in or out.
     let mirror = app.session.bilingual_mirror();
-    let pinched = mirror.is_some() && ui.rect_contains_pointer(area) && bilingual_pinch(app, ui);
-    if !pinched && (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
+    if mirror.is_some() && ui.rect_contains_pointer(area) {
+        bilingual_twist(app, ui);
+    }
+    if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
         let reading = app.session.view.read_mode;
         let pct = (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if reading { 75.0 } else { 10.0 }, if reading { 150.0 } else { 500.0 });
         let id = if reading { "view.readTextSize" } else { "view.zoom" };

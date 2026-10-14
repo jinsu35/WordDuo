@@ -26,9 +26,9 @@ translation start at the same place on the same page. The canvas crossfades the 
 | Gesture | Effect |
 |---|---|
 | Hold **⌥ Option** (Alt) by itself | Show the other language while held |
-| **Pinch** on the trackpad (fingers apart / together) | Blend more / less of the translation |
+| **Twist two fingers** on the trackpad (clockwise / anticlockwise), like a dial | Blend more / less of the translation |
 | Slider at the bottom of the page | Same blend, by mouse |
-| ⌘ / Ctrl + scroll | Still zooms the page |
+| Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
 
 ## Commands
 
