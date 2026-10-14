@@ -406,6 +406,12 @@ pub struct Session {
     )>,
     /// The bilingual view's mirror document and its layout cache.
     bi: crate::bilingual::BiState,
+    /// An input method's composition at the insertion point (`set_preedit`), and the document
+    /// as shown while it lasts: the composition typed in, underlined, so the text after it
+    /// makes room ((document revision, where, what) it was made for).
+    preedit: Option<(Pos, String)>,
+    #[allow(clippy::type_complexity)]
+    preedit_doc: Option<(u64, Pos, String, Arc<Document>)>,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
     /// Last mutating command (Repeat).
@@ -615,6 +621,8 @@ impl Session {
             cache: LayoutCache::new(),
             layout: None,
             bi: Default::default(),
+            preedit: None,
+            preedit_doc: None,
             originals: Default::default(),
             last_command: None,
             recording: None,
@@ -762,6 +770,7 @@ impl Session {
         let bilingual = self.view.bilingual && !show_hidden && mode != ViewMode::Outline;
         if let Some((r, w, h, m, sp, l, pf, o, hd, n)) = &self.layout
             && self.bi.on == bilingual
+            && self.preedit_matches()
             && *r == self.rev
             && (*w == width || mode == ViewMode::Print)
             && *h == height
@@ -790,11 +799,13 @@ impl Session {
             proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
             pad_after: None,
         };
-        let mut l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
+        let shown = self.display_doc();
+        let doc: &Document = shown.as_deref().unwrap_or(&self.doc);
+        let mut l = Arc::new(wordcraft_layout::layout(doc, &mut self.cache, &opts));
         self.bi.on = bilingual;
         self.bi.view = None;
         if bilingual {
-            l = self.bi.lay_out(&self.doc, &mut self.cache, opts, l);
+            l = self.bi.lay_out(doc, &mut self.cache, opts, l);
         }
         self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral));
         l
@@ -816,6 +827,59 @@ impl Session {
         self.layout = None;
         self.cache.clear();
         self.bi = Default::default();
+    }
+
+    /// Show an input method's composition `text` at the insertion point, as part of the text
+    /// (underlined) so what follows makes room for it; empty: none. Only shown, never part of the
+    /// document, its undo history or files. A selection shows none (typing replaces it).
+    pub fn set_preedit(&mut self, text: &str) {
+        let want = (!text.is_empty() && self.sel.is_collapsed()).then(|| (self.sel.focus.clone(), text.to_string()));
+        if want != self.preedit {
+            self.preedit = want;
+        }
+    }
+
+    /// The composition shown and where ([`Session::set_preedit`]).
+    pub fn preedit(&self) -> Option<&(Pos, String)> {
+        self.preedit.as_ref()
+    }
+
+    /// Whether the shown document was made for the current composition.
+    fn preedit_matches(&self) -> bool {
+        match (&self.preedit, &self.preedit_doc) {
+            (None, None) => true,
+            (Some((p, t)), Some((r, q, u, _))) => *r == self.rev && p == q && t == u,
+            _ => false,
+        }
+    }
+
+    /// The document as shown, when it differs from [`Session::doc`]: with the input method's
+    /// composition typed in at the insertion point. Pages are laid out ([`Session::layout`]) and
+    /// drawn from it.
+    pub fn display_doc(&mut self) -> Option<Arc<Document>> {
+        let Some((pos, text)) = self.preedit.clone() else {
+            self.preedit_doc = None;
+            return None;
+        };
+        if let Some((r, p, t, d)) = &self.preedit_doc
+            && *r == self.rev
+            && *p == pos
+            && *t == text
+        {
+            return Some(d.clone());
+        }
+        let mut doc = self.doc.clone();
+        let shown = doc.para_mut(pos.story, &pos.path).ok().and_then(|p| {
+            let props = CharProps { underline: Some(wordcraft_doc::props::Underline::Single), ..p.props_at(pos.off).clone() };
+            p.insert_text(pos.off, &text, &props).ok()
+        });
+        if shown.is_none() {
+            self.preedit_doc = None;
+            return None;
+        }
+        let doc = Arc::new(doc);
+        self.preedit_doc = Some((self.rev, pos, text, doc.clone()));
+        Some(doc)
     }
 
     /// Work in the other language of a bilingual document ([`crate::bilingual::swap_pairs`]):
@@ -1080,6 +1144,8 @@ impl Session {
             cache: _,
             layout: _,
             bi: _,
+            preedit: _,
+            preedit_doc: _,
             originals: _,
             last_command: _,
             recording: _,

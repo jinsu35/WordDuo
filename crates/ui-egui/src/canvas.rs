@@ -952,6 +952,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.read_target_page = None;
     }
     crate::ink::replay_tick(app, ui.ctx());
+    // An input method's composition is laid out with the text, so what follows makes room.
+    let preedit = app.canvas.ime_preedit.clone();
+    app.session.set_preedit(&preedit);
     let layout = app.session.layout();
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -1212,7 +1215,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             if visible && !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
                 let opts = render_opts(app);
-                let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
+                let shown = app.session.display_doc();
+                let img = wordcraft_render::render_page(shown.as_deref().unwrap_or(&app.session.doc), page, scale_px, &opts);
                 let px = img.to_straight();
                 let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px);
                 match app.canvas.textures.get_mut(&i) {
@@ -1441,18 +1445,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
+        // While composing, the caret follows the composition shown in the text.
+        let caret_at = match app.session.preedit() {
+            Some((at, text)) => Pos { off: at.off + text.len(), ..at.clone() },
+            None => app.session.sel.focus.clone(),
+        };
         if !math_caret
-            && let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
+            && let Some(c) = layout.caret_on(&caret_at, app.session.page_hint)
             && let Some(pr) = rects.get(c.page)
         {
             let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
             let x = pr.min.x + c.x * scale;
             let y0 = pr.min.y + c.top * scale;
             let y1 = y0 + c.height * scale;
-            let preedit_width = if app.canvas.ime_preedit.is_empty() {
-                0.0
-            } else {
+            // A composition not shown in the text (a selection, an equation) is drawn after it.
+            let floating = !app.canvas.ime_preedit.is_empty() && app.session.preedit().is_none();
+            let preedit_width = if floating {
                 painter.layout_no_wrap(app.canvas.ime_preedit.clone(), regular(c.height * scale * 0.8), caret_color).size().x
+            } else {
+                0.0
             };
             let since = crate::now_ms() - app.canvas.caret_visible_since;
             let on = ((since / 530.0) as u64).is_multiple_of(2);
@@ -1483,7 +1494,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     });
                 });
             }
-            if !app.canvas.ime_preedit.is_empty() {
+            if floating {
                 // The composition is interface text, but it may be in a script the interface fonts lack
                 // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
                 let preedit = app.canvas.ime_preedit.clone();

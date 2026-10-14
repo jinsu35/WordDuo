@@ -206,3 +206,41 @@ fn switching_language_edits_the_language_shown() {
     // Nothing to switch to without translations.
     assert!(Session::new(doc_of(&["Only English."])).run("bilingual.switch", &json!({})).is_err());
 }
+
+/// An input method's composition is laid out with the text (so what follows makes room for it,
+/// rather than being drawn over), without becoming part of the document.
+#[test]
+fn a_composition_makes_room_in_the_text_without_entering_the_document() {
+    for bilingual in [false, true] {
+        let mut s = Session::new(doc_of(&["Hello there friend."]));
+        s.view.bilingual = bilingual;
+        if bilingual {
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+            run(&mut s, "bilingual.translate", json!({"text": "안 래 그래어조."}));
+            run(&mut s, "bilingual.switch", json!({}));
+        } else {
+            run(&mut s, "select.all", json!({}));
+            run(&mut s, "text.insert", json!({"text": "안 래 그래어조."}));
+        }
+        let at = "안 래 ".len();
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, at));
+        let x_of = |l: &DocLayout, off: usize| l.caret_on(&wordcraft_doc::Pos::body(0, off), 0).map(|c| c.x).unwrap();
+        let before = s.layout();
+        let next = x_of(&before, at);
+        s.set_preedit("녕");
+        let shown = s.layout();
+        let doc = s.display_doc().unwrap();
+        assert_eq!(doc.body[0].as_para().unwrap().plain_text(), "안 래 녕그래어조.");
+        assert_eq!(body_text(&s, 0), "안 래 그래어조.", "the document itself is unchanged");
+        // "그" now starts after the composition.
+        assert!(x_of(&shown, at + "녕".len()) > next + 5.0, "bilingual {bilingual}");
+        // It goes when the composition ends (committed or cancelled).
+        s.set_preedit("");
+        assert!(s.display_doc().is_none());
+        assert!((x_of(&s.layout(), at) - next).abs() < 0.01);
+        // A selection shows none: typing replaces it.
+        s.sel = crate::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, at) };
+        s.set_preedit("녕");
+        assert!(s.display_doc().is_none());
+    }
+}
