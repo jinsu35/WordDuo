@@ -38,6 +38,9 @@ pub struct CanvasState {
     /// The bilingual view's language worked in, and how many times it has switched (the blend's
     /// easing starts afresh after a switch).
     bi_epoch: (bool, u64),
+    /// When the bilingual switch key (Option, or Ctrl off macOS) went down, and whether it has
+    /// been alone since ([`bilingual_switch_key`]).
+    bi_key: Option<(f64, bool)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
@@ -162,6 +165,7 @@ impl Default for CanvasState {
             textures: HashMap::new(),
             mirror_textures: HashMap::new(),
             bi_epoch: (false, 0),
+            bi_key: None,
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
@@ -668,21 +672,83 @@ fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
     }
 }
 
-/// The share of the page the mirror (the other language) covers this frame: the blend, seen
-/// from the language worked in, eased. (No modifier key peeks or switches: on macOS Option is
-/// everyday editing, ⌥⌫ and ⌥← among it, and a peek on its way flashed the other language.)
+/// A tap of the switch key alone (released sooner than this, seconds) switches the language
+/// worked in; held alone longer, it shows the other language until let go.
+const PEEK_AFTER: f64 = 0.25;
+
+/// The bilingual view's switch key: Option on macOS, Ctrl elsewhere (Alt is the menus and KeyTips
+/// there). Both are nearly always pressed with another key, which then makes it no tap or peek.
+fn switch_key(m: egui::Modifiers) -> (bool, bool) {
+    if cfg!(target_os = "macos") { (m.alt, m.ctrl || m.shift || m.mac_cmd || m.command) } else { (m.ctrl, m.alt || m.shift || m.mac_cmd) }
+}
+
+/// Follow the switch key alone: `Some(true)` while it is held alone past [`PEEK_AFTER`] (peek),
+/// and runs `bilingual.switch` when it is tapped alone. Anything else this frame (a key, text,
+/// the input method, a click, another modifier) makes this press no tap or peek: ⌥⌫ deletes a
+/// word without showing the other language. Key presses come from this frame's events, not the
+/// keys held down, which a key whose release the input method swallowed would keep spoiling.
+fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
+    let (down, other, busy, now) = ctx.input(|i| {
+        let (down, other) = switch_key(i.modifiers);
+        let busy = i.pointer.any_down()
+            || i.events.iter().any(|e| match e {
+                egui::Event::Key { key, pressed: true, .. } => {
+                    !matches!(key, egui::Key::AltLeft | egui::Key::AltRight | egui::Key::ControlLeft | egui::Key::ControlRight)
+                }
+                egui::Event::Text(_) | egui::Event::Ime(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut => true,
+                egui::Event::PointerButton { pressed: true, .. } => true,
+                _ => false,
+            });
+        (down, other, busy, i.time)
+    });
+    // A text box of the interface (Find, a dialog) has the keys.
+    let typing_elsewhere = ctx.egui_wants_keyboard_input() && !app.canvas.focused;
+    let clean = !other && !busy && !typing_elsewhere;
+    match (down, app.canvas.bi_key) {
+        (true, None) => {
+            app.canvas.bi_key = Some((now, clean));
+            false
+        }
+        (true, Some((t, c))) => {
+            let c = c && clean;
+            app.canvas.bi_key = Some((t, c));
+            if c && now - t < PEEK_AFTER {
+                // Not a peek yet: look again once it would be.
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(PEEK_AFTER - (now - t)));
+            }
+            c && now - t >= PEEK_AFTER
+        }
+        (false, Some((t, c))) => {
+            app.canvas.bi_key = None;
+            if c && !other && now - t < PEEK_AFTER {
+                let _ = app.run("bilingual.switch", json!({}));
+            }
+            false
+        }
+        (false, None) => false,
+    }
+}
+
+/// The share of the page the mirror (the other language) covers this frame, eased: the blend,
+/// seen from the language worked in, or while the switch key is held alone the other language
+/// whole ([`bilingual_switch_key`]).
 fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
+    let peek = on && bilingual_switch_key(app, ctx);
     let view = &app.session.view;
     let (blend, flipped) = (view.bilingual_mix.clamp(0.0, 1.0), view.bilingual_flipped);
-    let target = match (on, flipped) {
+    let shown = if flipped { 1.0 - blend } else { blend };
+    let target = match (on, peek) {
         (false, _) => 0.0,
-        (true, true) => 1.0 - blend,
-        (true, false) => blend,
+        (true, true) if shown < 0.5 => 1.0,
+        (true, true) => 0.0,
+        (true, false) => shown,
     };
-    // A switch changes which language is the page and which the mirror: start the easing afresh
-    // rather than fade from where the other side was.
+    // A switch makes the mirror the page and the page the mirror: their textures trade places too
+    // (both are laid out alike, so each is already the other's picture), and the easing starts
+    // afresh, so the new language shows at once with nothing of the old one fading over it.
     if app.canvas.bi_epoch.0 != flipped {
         app.canvas.bi_epoch = (flipped, app.canvas.bi_epoch.1.wrapping_add(1));
+        std::mem::swap(&mut app.canvas.textures, &mut app.canvas.mirror_textures);
     }
     let secs = if app.animations_on() { 0.12 } else { 0.0 };
     ctx.animate_value_with_time(egui::Id::new(("bilingual-blend", app.canvas.bi_epoch.1)), target, secs)
@@ -712,7 +778,11 @@ fn language_name(text: &str) -> &'static str {
 /// View › Bilingual: the blend slider at the foot of the document, between the two languages,
 /// and how to switch, peek and twist.
 fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens) {
-    let hint = "Twist two fingers to blend and switch";
+    let hint = if cfg!(target_os = "macos") {
+        "Tap ⌥ to switch · hold to peek · twist two fingers to blend"
+    } else {
+        "Tap Ctrl to switch · hold to peek · twist two fingers to blend"
+    };
     // The languages of the first pair, in the order the slider runs: the text the document opened
     // with, then its translation.
     let doc = &app.session.doc;
@@ -2823,6 +2893,68 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// A document with one paragraph and its translation, in the bilingual view.
+    fn bilingual_app() -> WordApp {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello."})).unwrap();
+        app.run("bilingual.translate", json!({"text": "안녕."})).unwrap();
+        app
+    }
+
+    /// One frame at `time` with the switch key (Option on macOS, Ctrl elsewhere) `down` and
+    /// `events`; whether the other language was peeked at.
+    fn key_frame(app: &mut WordApp, ctx: &egui::Context, time: f64, down: bool, events: Vec<egui::Event>) -> bool {
+        let modifiers = if cfg!(target_os = "macos") {
+            egui::Modifiers { alt: down, ..Default::default() }
+        } else {
+            egui::Modifiers { ctrl: down, command: down, ..Default::default() }
+        };
+        let mut peek = false;
+        let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(time), events, ..Default::default() }, |ui| {
+            peek = bilingual_switch_key(app, ui.ctx());
+        });
+        out.textures_delta.clear();
+        peek
+    }
+
+    #[test]
+    fn the_switch_key_taps_to_switch_and_holds_to_peek() {
+        let ctx = egui::Context::default();
+        let mut app = bilingual_app();
+        // A tap switches the language worked in, without a peek on the way.
+        assert!(!key_frame(&mut app, &ctx, 1.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 1.1, false, vec![]));
+        assert!(app.session.view.bilingual_flipped, "a tap switches");
+        assert_eq!(app.session.doc.body[0].as_para().unwrap().plain_text(), "안녕.");
+        // A hold peeks once it has lasted a moment, and letting go switches nothing.
+        assert!(!key_frame(&mut app, &ctx, 2.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 2.1, true, vec![]), "too soon to peek");
+        assert!(key_frame(&mut app, &ctx, 2.0 + PEEK_AFTER, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 2.6, false, vec![]));
+        assert!(app.session.view.bilingual_flipped, "a peek doesn't switch");
+        // ⌥⌫ (a chord, quick or slow) neither peeks nor switches.
+        let backspace =
+            || vec![egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }];
+        assert!(!key_frame(&mut app, &ctx, 3.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 3.05, true, backspace()));
+        assert!(!key_frame(&mut app, &ctx, 3.5, true, vec![]), "no peek after a chord");
+        assert!(!key_frame(&mut app, &ctx, 3.6, false, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 4.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 4.05, true, backspace()));
+        assert!(!key_frame(&mut app, &ctx, 4.1, false, vec![]));
+        assert!(app.session.view.bilingual_flipped, "a chord doesn't switch");
+        // Text typed with it (an accent) doesn't either.
+        assert!(!key_frame(&mut app, &ctx, 5.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 5.05, true, vec![egui::Event::Text("é".into())]));
+        assert!(!key_frame(&mut app, &ctx, 5.1, false, vec![]));
+        assert!(app.session.view.bilingual_flipped);
+        // And it keeps working afterwards (it used to stop after typing Korean).
+        assert!(!key_frame(&mut app, &ctx, 6.0, true, vec![]));
+        assert!(!key_frame(&mut app, &ctx, 6.1, false, vec![]));
+        assert!(!app.session.view.bilingual_flipped, "tapped back");
+    }
 
     #[test]
     fn reading_animation_eases_then_lands_exactly_on_column_start() {

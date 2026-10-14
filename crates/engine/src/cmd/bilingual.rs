@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"text"?: string, "lang"?: BCP 47 tag (default: Korean for English text, English for Korean)}"#),
         CommandSpec::new("bilingual.pair", "Pair Paragraphs", "View › Bilingual", pair).params(r#"{"by"?: "language" (default) | "alternate"}"#),
         CommandSpec::new("bilingual.swap", "Swap Languages", "View › Bilingual", swap),
-        // Also when the blend is turned past the middle.
+        // Tap Option alone (Ctrl off macOS), or turn the blend past the middle.
         CommandSpec::new("bilingual.switch", "Switch Language", "View › Bilingual", switch)
             .params(r#"{"value"?: bool (work in the translation), "keepBlend"?: bool}"#)
             .pure(),

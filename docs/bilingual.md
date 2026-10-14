@@ -30,6 +30,8 @@ beside it. Switching is not an undo step.
 
 | Gesture | Effect |
 |---|---|
+| **Tap ⌥ Option** alone (Ctrl on Windows and Linux) | Switch the language you work in |
+| **Hold ⌥ Option** alone, ¼ s or more (Ctrl elsewhere) | Peek at the other language while held. ⌥⌫, ⌥← and other Option chords never peek |
 | **Twist two fingers** on the trackpad, like a dial (about 35° end to end) | Blend from one language to the other; past the middle, the language you work in switches too |
 | Slider at the bottom of the page (the language you work in is in bold) | Same as twisting, by mouse |
 | Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
