@@ -192,6 +192,10 @@ pub struct ViewState {
     /// Show the translations under their paragraphs, for editing them (hidden text shown).
     #[serde(default)]
     pub bilingual_edit: bool,
+    /// Working in the translation (`bilingual.switch`): every paragraph has changed places with
+    /// its translation since the document was opened.
+    #[serde(default)]
+    pub bilingual_flipped: bool,
 }
 
 fn on() -> bool {
@@ -252,6 +256,7 @@ impl Default for ViewState {
             bilingual: true,
             bilingual_mix: 0.0,
             bilingual_edit: false,
+            bilingual_flipped: false,
         }
     }
 }
@@ -813,6 +818,20 @@ impl Session {
         self.bi = Default::default();
     }
 
+    /// Work in the other language of a bilingual document ([`crate::bilingual::swap_pairs`]):
+    /// the document and every undo and redo step swap each paragraph with its translation, so the
+    /// history still matches the document. The document counts as changed.
+    pub fn switch_bilingual(&mut self) {
+        crate::bilingual::swap_pairs(&mut self.doc);
+        for u in self.history.iter_mut().chain(self.redo.iter_mut()) {
+            crate::bilingual::swap_pairs(&mut Arc::make_mut(u).doc);
+        }
+        self.view.bilingual_flipped = !self.view.bilingual_flipped;
+        self.typing_open = false;
+        self.clamp_selection();
+        self.touch();
+    }
+
     /// The bilingual view's mirror: the document with each paragraph showing its translation,
     /// laid out to match [`Session::layout`] page for page. `None` when the view is off or the
     /// document has no translations.
@@ -1005,6 +1024,8 @@ impl Session {
         self.edit_marks.clear();
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
+        self.view.bilingual_flipped = false;
+        self.view.bilingual_mix = 0.0;
         self.reset_history();
         self.touch();
         self.dirty = false;

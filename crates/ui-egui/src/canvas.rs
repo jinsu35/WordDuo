@@ -35,6 +35,12 @@ pub struct CanvasState {
     /// View › Bilingual: the pages of the mirror document (each paragraph showing its
     /// translation), blended over `textures` (see [`wordcraft_engine::bilingual`]).
     mirror_textures: HashMap<usize, (u64, TextureHandle)>,
+    /// When Option (Alt) went down by itself, and whether it has stayed alone since (a tap
+    /// switches the bilingual view's language, a hold shows the other one).
+    bi_option: Option<(f64, bool)>,
+    /// The bilingual view's language worked in, and how many times it has switched (the blend's
+    /// easing starts afresh after a switch).
+    bi_epoch: (bool, u64),
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
@@ -158,6 +164,8 @@ impl Default for CanvasState {
         CanvasState {
             textures: HashMap::new(),
             mirror_textures: HashMap::new(),
+            bi_option: None,
+            bi_epoch: (false, 0),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
@@ -631,12 +639,28 @@ impl PageKeys {
 }
 
 /// How far a two-finger twist moves the bilingual blend, per radian: one comfortable twist
-/// (about 35°) goes from the text alone to the translation alone.
+/// (about 35°) goes from one language alone to the other alone.
 const TWIST_BLEND: f32 = 1.65;
+/// The blend switches the language worked in when it passes the middle by this much (so a dial
+/// resting near the middle doesn't switch back and forth).
+const SWITCH_MARGIN: f32 = 0.05;
+/// Longest press of Option (Alt) by itself that counts as a tap (switch the language worked in)
+/// rather than a hold (look at the other language while held), seconds.
+const TAP_SECS: f64 = 0.3;
 
-/// View › Bilingual: turn this frame's two-finger twist on the trackpad into the translation
-/// blend, like a dial: clockwise shows more of the translation, anticlockwise more of the text.
-/// A pinch still zooms the page.
+/// View › Bilingual: set the blend (0: the text the document opened with, 1: its translation),
+/// switching the language worked in when it passes the middle.
+fn set_bilingual_blend(app: &mut WordApp, blend: f32) {
+    let blend = blend.clamp(0.0, 1.0);
+    let _ = app.run("bilingual.mix", json!({"value": blend}));
+    let flipped = app.session.view.bilingual_flipped;
+    if (!flipped && blend > 0.5 + SWITCH_MARGIN) || (flipped && blend < 0.5 - SWITCH_MARGIN) {
+        let _ = app.run("bilingual.switch", json!({"value": !flipped, "keepBlend": true}));
+    }
+}
+
+/// View › Bilingual: turn this frame's two-finger twist on the trackpad into the blend, like a
+/// dial: clockwise towards the translation, anticlockwise towards the text. A pinch still zooms.
 fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
     let turn: f32 = ui.input(|i| {
         i.events
@@ -647,53 +671,113 @@ fn bilingual_twist(app: &mut WordApp, ui: &Ui) {
             })
             .sum()
     });
-    if !turn.is_finite() || turn.abs() < 1e-4 {
-        return;
+    if turn.is_finite() && turn.abs() >= 1e-4 {
+        set_bilingual_blend(app, app.session.view.bilingual_mix + turn * TWIST_BLEND);
     }
-    let mix = (app.session.view.bilingual_mix + turn * TWIST_BLEND).clamp(0.0, 1.0);
-    let _ = app.run("bilingual.mix", json!({"value": mix}));
 }
 
-/// Whether Option (Alt) is held by itself over the focused document: the bilingual view shows
-/// the other language while it is. Option with a letter (typing an accent) or with the mouse
-/// (column selection) doesn't count.
-fn flip_held(app: &mut WordApp, ctx: &egui::Context) -> bool {
+/// Option (Alt) by itself over the focused document: `(down, clean)`, `clean` while no other key,
+/// modifier or mouse button is down with it (Option with a letter types an accent; with the mouse
+/// it selects a column).
+fn option_alone(app: &WordApp, ctx: &egui::Context) -> (bool, bool) {
     if !app.canvas.focused {
-        return false;
+        return (false, false);
     }
-    let held = ctx.input(|i| {
+    ctx.input(|i| {
         let m = i.modifiers;
-        m.alt
-            && !(m.command || m.ctrl || m.shift || m.mac_cmd)
+        let clean = !(m.command || m.ctrl || m.shift || m.mac_cmd)
             && i.keys_down.iter().all(|k| matches!(k, egui::Key::AltLeft | egui::Key::AltRight))
-            && !i.pointer.any_down()
-    });
-    if held {
-        // Letting go after a flip doesn't show KeyTips (Windows, Linux).
+            && !i.pointer.any_down();
+        (m.alt, clean)
+    })
+}
+
+/// The share of the page the mirror (the other language) covers this frame, eased: the blend,
+/// seen from the language worked in; while Option is held alone, the other language whole; a
+/// tap of Option switches the language worked in.
+fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
+    let view = &app.session.view;
+    let (blend, flipped) = (view.bilingual_mix.clamp(0.0, 1.0), view.bilingual_flipped);
+    let shown = if flipped { 1.0 - blend } else { blend };
+    // (Option is only watched with translations to show: it opens KeyTips on Windows and Linux.)
+    let (down, clean) = if on { option_alone(app, ctx) } else { (false, false) };
+    let now = ctx.input(|i| i.time);
+    let mut peek = false;
+    match (down, app.canvas.bi_option) {
+        (true, None) => app.canvas.bi_option = Some((now, clean)),
+        (true, Some((t, c))) => {
+            app.canvas.bi_option = Some((t, c && clean));
+            peek = c && clean;
+        }
+        (false, Some((t, c))) => {
+            app.canvas.bi_option = None;
+            if c && now - t <= TAP_SECS {
+                let _ = app.run("bilingual.switch", json!({}));
+            }
+        }
+        (false, None) => {}
+    }
+    if peek {
+        // Letting go after a peek doesn't show KeyTips (Windows, Linux).
         app.ui.alt_chord_used = true;
     }
-    held
-}
-
-/// The translation's share of the page this frame: the blend, or while Option is held the
-/// other language whole; eased between the two.
-fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
-    let mix = app.session.view.bilingual_mix.clamp(0.0, 1.0);
-    // (Option is only watched with translations to show: it opens KeyTips on Windows and Linux.)
-    let target = match (on, on && flip_held(app, ctx)) {
+    let target = match (on, peek) {
         (false, _) => 0.0,
-        (true, true) if mix < 0.5 => 1.0,
+        (true, true) if shown < 0.5 => 1.0,
         (true, true) => 0.0,
-        (true, false) => mix,
+        (true, false) => shown,
     };
+    // A switch changes which language is the page and which the mirror: start the easing afresh
+    // rather than fade from where the other side was.
+    if app.canvas.bi_epoch.0 != app.session.view.bilingual_flipped {
+        app.canvas.bi_epoch = (app.session.view.bilingual_flipped, app.canvas.bi_epoch.1.wrapping_add(1));
+    }
     let secs = if app.animations_on() { 0.12 } else { 0.0 };
-    ctx.animate_value_with_time(egui::Id::new("bilingual-blend"), target, secs)
+    ctx.animate_value_with_time(egui::Id::new(("bilingual-blend", app.canvas.bi_epoch.1)), target, secs)
 }
 
-/// View › Bilingual: the blend slider at the foot of the document, and how to flip and twist.
+/// Make the interface fonts able to draw `text` (an input method's composition, a language name)
+/// in a script they lack, borrowing the document fonts' fallback faces (#565).
+fn borrow_faces_for(app: &mut WordApp, ctx: &egui::Context, text: &str) {
+    let new = crate::theme::faces_for_preedit(
+        text,
+        &app.canvas.ime_faces,
+        |c| (c as u32) < 0x250,
+        |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
+    );
+    if !new.is_empty() {
+        app.canvas.ime_faces.extend(new);
+        crate::theme::install_fonts_extra(ctx, app.fonts_hans, app.fonts_system_cjk, &app.canvas.ime_faces);
+        ctx.request_repaint();
+    }
+}
+
+/// The name of the language `text` is mostly written in, for the blend slider.
+fn language_name(text: &str) -> &'static str {
+    if wordcraft_engine::bilingual::is_korean(text) { "한국어" } else { "English" }
+}
+
+/// View › Bilingual: the blend slider at the foot of the document, between the two languages,
+/// and how to switch, peek and twist.
 fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens) {
-    let flip =
-        if cfg!(target_os = "macos") { "Hold ⌥ to flip · twist two fingers to blend" } else { "Hold Alt to flip · twist two fingers to blend" };
+    let hint = if cfg!(target_os = "macos") {
+        "Tap ⌥ to switch · hold to peek · twist two fingers to blend"
+    } else {
+        "Tap Alt to switch · hold to peek · twist two fingers to blend"
+    };
+    // The languages of the first pair, in the order the slider runs: the text the document opened
+    // with, then its translation.
+    let doc = &app.session.doc;
+    let names = wordcraft_engine::bilingual::pairs(doc).first().map(|(a, b)| {
+        let text = |i: usize| doc.body.get(i).and_then(|x| x.as_para()).map(|p| p.plain_text()).unwrap_or_default();
+        let (shown, hidden) = (language_name(&text(*a)), language_name(&text(*b)));
+        if app.session.view.bilingual_flipped { (hidden, shown) } else { (shown, hidden) }
+    });
+    let (left, right) = match names {
+        Some((l, r)) if l != r => (l.to_string(), r.to_string()),
+        _ => (tl!("Text").to_string(), tl!("Translation").to_string()),
+    };
+    borrow_faces_for(app, ctx, &format!("{left}{right}"));
     egui::Area::new(egui::Id::new("bilingual-chip"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(area.center().x, area.max.y - 10.0))
@@ -701,15 +785,20 @@ fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(tl!("Text"));
+                    // The language worked in, in bold.
+                    let flipped = app.session.view.bilingual_flipped;
+                    let name = |s: &str, on: bool| if on { egui::RichText::new(s).strong() } else { egui::RichText::new(s).color(t.text_dim) };
+                    ui.label(name(&left, !flipped));
                     ui.spacing_mut().slider_width = 180.0;
-                    let mut mix = app.session.view.bilingual_mix;
-                    if ui.add(egui::Slider::new(&mut mix, 0.0..=1.0).show_value(false)).changed() {
-                        let _ = app.run("bilingual.mix", json!({"value": mix}));
+                    // The track shows against the popup.
+                    ui.visuals_mut().widgets.inactive.bg_fill = t.border_strong;
+                    let mut blend = app.session.view.bilingual_mix;
+                    if ui.add(egui::Slider::new(&mut blend, 0.0..=1.0).show_value(false)).changed() {
+                        set_bilingual_blend(app, blend);
                     }
-                    ui.label(tl!("Translation"));
+                    ui.label(name(&right, flipped));
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(tl!(flip)).small().color(t.text_dim));
+                    ui.label(egui::RichText::new(tl!(hint)).small().color(t.text_dim));
                 });
             });
         });
@@ -1324,17 +1413,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !app.canvas.ime_preedit.is_empty() {
                 // The composition is interface text, but it may be in a script the interface fonts lack
                 // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
-                let new = crate::theme::faces_for_preedit(
-                    &app.canvas.ime_preedit,
-                    &app.canvas.ime_faces,
-                    |c| (c as u32) < 0x250,
-                    |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
-                );
-                if !new.is_empty() {
-                    app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_extra(ui.ctx(), app.fonts_hans, app.fonts_system_cjk, &app.canvas.ime_faces);
-                    ui.ctx().request_repaint();
-                }
+                let preedit = app.canvas.ime_preedit.clone();
+                borrow_faces_for(app, ui.ctx(), &preedit);
                 let g = painter.text(pos2(x, y1), egui::Align2::LEFT_BOTTOM, &app.canvas.ime_preedit, regular(c.height * scale * 0.8), caret_color);
                 painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, caret_color));
             }

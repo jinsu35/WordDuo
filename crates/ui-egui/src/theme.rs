@@ -376,6 +376,16 @@ pub fn caption_char_covered(c: char) -> bool {
     (c as u32) < 0x250 || wordcraft_fonts::is_cjk(c)
 }
 
+/// The largest face [`faces_for_preedit`] copies into the interface fonts for `c`: 16 MB, or
+/// 64 MB for Hangul, which no CJK interface font covers and whose only system faces are large
+/// collections (macOS: Apple SD Gothic Neo, about 52 MB). Without one, the syllable being
+/// composed with a Korean input method draws as a box.
+fn preedit_face_limit(c: char) -> usize {
+    let hangul =
+        matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{D7B0}'..='\u{D7FF}');
+    if hangul { 64 << 20 } else { 16 << 20 }
+}
+
 /// Document faces needed to draw `text` (the input method's composition, or a file name in the
 /// window caption), one for each character the interface fonts cannot draw, skipping faces in
 /// `have` (#565). Characters of the embedded interface fonts are not looked up; very large faces
@@ -391,7 +401,7 @@ pub fn faces_for_preedit(
         if have.iter().chain(&out).any(|f| f.covers(c)) {
             continue;
         }
-        if let Some(f) = lookup(c).filter(|f| f.data().len() <= 16 << 20 && !have.iter().chain(&out).any(|h| h.id() == f.id())) {
+        if let Some(f) = lookup(c).filter(|f| f.data().len() <= preedit_face_limit(c) && !have.iter().chain(&out).any(|h| h.id() == f.id())) {
             out.push(f);
         }
     }

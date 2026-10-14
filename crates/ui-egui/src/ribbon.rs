@@ -1652,7 +1652,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "pairParagraphs", Some("Pair Paragraphs"), "Pair Paragraphs", "bilingual.pair", json!({}), false);
         });
         stack(ui, |ui| {
-            small(ui, app, "swapLanguages", Some("Swap Languages"), "Swap Languages", "bilingual.swap", json!({}), false);
+            small(ui, app, "swapLanguages", Some("Switch Language"), "Switch Language", "bilingual.switch", json!({}), v.bilingual_flipped);
         });
     });
     group(ui, "Zoom", None, app, |ui, app| {

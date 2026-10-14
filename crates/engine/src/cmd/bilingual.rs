@@ -24,7 +24,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bilingual.view", "Bilingual View", "View › Bilingual", |s, v| toggle(s, v, |x| &mut x.bilingual))
             .params(r#"{"value"?: bool}"#)
             .pure(),
-        CommandSpec::new("bilingual.mix", "Translation Blend", "View › Bilingual", mix).params(r#"{"value": 0.0 (text) – 1.0 (translation)}"#).pure(),
+        CommandSpec::new("bilingual.mix", "Translation Blend", "View › Bilingual", mix)
+            .params(r#"{"value": 0.0 (the text the document opened with) – 1.0 (its translation)}"#)
+            .pure(),
         // The translations shown under their paragraphs, to write and edit them.
         CommandSpec::new("bilingual.edit", "Edit Translations", "View › Bilingual", |s, v| {
             let r = toggle(s, v, |x| &mut x.bilingual_edit);
@@ -37,6 +39,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"text"?: string, "lang"?: BCP 47 tag (default: Korean for English text, English for Korean)}"#),
         CommandSpec::new("bilingual.pair", "Pair Paragraphs", "View › Bilingual", pair).params(r#"{"by"?: "language" (default) | "alternate"}"#),
         CommandSpec::new("bilingual.swap", "Swap Languages", "View › Bilingual", swap),
+        // Tap Option (Alt) by itself, or turn the blend past the middle.
+        CommandSpec::new("bilingual.switch", "Switch Language", "View › Bilingual", switch)
+            .params(r#"{"value"?: bool (work in the translation), "keepBlend"?: bool}"#)
+            .pure(),
         CommandSpec::new("bilingual.pairs", "List Translations", "View › Bilingual", list).pure(),
     ]
 }
@@ -182,34 +188,37 @@ fn pair(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"paired": made, "pairs": pairs(&s.doc).len()}))
 }
 
-/// Swap every paragraph with its translation: the translation becomes the text and the text the
-/// translation. Each keeps its own place's paragraph formatting.
+/// Swap every paragraph with its translation, as an undoable edit (see `bilingual.switch` for
+/// changing the language being worked in).
 fn swap(s: &mut Session, _: &Value) -> CmdResult {
-    let all = pairs(&s.doc);
-    for (a, b) in &all {
-        let (Some(pa), Some(pb)) = (s.doc.body.get(*a).and_then(|x| x.as_para()).cloned(), s.doc.body.get(*b).and_then(|x| x.as_para()).cloned())
-        else {
-            continue;
-        };
-        if let Ok(x) = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(*a)) {
-            (x.text, x.runs, x.objects) = (pb.text, pb.runs, pb.objects);
-            for r in &mut x.runs {
-                r.props.hidden = None;
-            }
-            x.touch();
-        }
-        if let Ok(y) = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(*b)) {
-            (y.text, y.runs, y.objects) = (pa.text, pa.runs, pa.objects);
-            y.touch();
-        }
-    }
+    let n = crate::bilingual::swap_pairs(&mut s.doc);
     s.clamp_selection();
     sel_result(s).map(|mut r| {
         if let Some(m) = r.as_object_mut() {
-            m.insert("swapped".into(), json!(all.len()));
+            m.insert("swapped".into(), json!(n));
         }
         r
     })
+}
+
+/// Work in the other language: every paragraph and its translation change places, so the text
+/// typed, printed and saved is the language shown. Not an undo step: the undo history is switched
+/// too, so undoing takes back edits in either language. `value` is whether to work in the
+/// translation (the language hidden when the document was opened); without it, the other one.
+/// The blend goes all the way to the language worked in, unless `keepBlend` (a dial turned past
+/// the middle).
+fn switch(s: &mut Session, v: &Value) -> CmdResult {
+    if pairs(&s.doc).is_empty() {
+        return Err(CmdError::Failed("there are no translations to switch to".into()));
+    }
+    let to = p::bool(v, "value").unwrap_or(!s.view.bilingual_flipped);
+    if to != s.view.bilingual_flipped {
+        s.switch_bilingual();
+    }
+    if !p::bool(v, "keepBlend").unwrap_or(false) {
+        s.view.bilingual_mix = if to { 1.0 } else { 0.0 };
+    }
+    Ok(json!({"translation": s.view.bilingual_flipped, "blend": s.view.bilingual_mix}))
 }
 
 fn list(s: &mut Session, _: &Value) -> CmdResult {

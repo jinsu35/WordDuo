@@ -175,3 +175,34 @@ fn bilingual_commands_never_panic_on_odd_params() {
     s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
     let _ = s.run("bilingual.translate", &json!({"text": "끝"}));
 }
+
+#[test]
+fn switching_language_edits_the_language_shown() {
+    let mut s = Session::new(doc_of(&["Hello.", "Bye."]));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "bilingual.translate", json!({"text": "안녕."}));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+    run(&mut s, "text.insert", json!({"text": "Good "}));
+    // Work in Korean: typed text goes into the Korean.
+    let r = run(&mut s, "bilingual.switch", json!({}));
+    assert_eq!((r["translation"].as_bool(), r["blend"].as_f64()), (Some(true), Some(1.0)));
+    assert_eq!((body_text(&s, 0), body_text(&s, 1)), ("안녕.".into(), "Hello.".into()));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "안녕".len()));
+    run(&mut s, "text.insert", json!({"text": "하세요"}));
+    assert_eq!(body_text(&s, 0), "안녕하세요.");
+    // Back to English: the Korean edit stays with the Korean.
+    run(&mut s, "bilingual.switch", json!({"value": false}));
+    assert_eq!((body_text(&s, 0), body_text(&s, 1)), ("Hello.".into(), "안녕하세요.".into()));
+    assert_eq!(s.view.bilingual_mix, 0.0);
+    // Undo takes back the Korean typing, then the English, in the language shown now.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!((body_text(&s, 0), body_text(&s, 1)), ("Hello.".into(), "안녕.".into()));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_text(&s, 2), "Bye.");
+    assert_eq!(pairs(&s.doc), vec![(0, 1)]);
+    // Turning the dial past the middle keeps the blend where it is.
+    let r = run(&mut s, "bilingual.switch", json!({"value": true, "keepBlend": true}));
+    assert_eq!(r["blend"].as_f64(), Some(0.0));
+    // Nothing to switch to without translations.
+    assert!(Session::new(doc_of(&["Only English."])).run("bilingual.switch", &json!({})).is_err());
+}

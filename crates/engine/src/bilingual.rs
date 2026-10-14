@@ -103,6 +103,29 @@ fn shown_translation(source: &Paragraph, tr: &Paragraph, rev: u64, tint: Option<
     p
 }
 
+/// Swap every paragraph with its translation: the translation becomes the text and the text
+/// the translation. Each keeps its own place's paragraph formatting. Returns the pairs swapped.
+pub fn swap_pairs(doc: &mut Document) -> usize {
+    let all = pairs(doc);
+    for (a, b) in &all {
+        let (Some(pa), Some(pb)) = (body_para(doc, *a).cloned(), body_para(doc, *b).cloned()) else {
+            continue;
+        };
+        if let Ok(x) = doc.para_mut(StoryRef::Body, &Path::top(*a)) {
+            (x.text, x.runs, x.objects) = (pb.text, pb.runs, pb.objects);
+            for r in &mut x.runs {
+                r.props.hidden = None;
+            }
+            x.touch();
+        }
+        if let Ok(y) = doc.para_mut(StoryRef::Body, &Path::top(*b)) {
+            (y.text, y.runs, y.objects) = (pa.text, pa.runs, pa.objects);
+            y.touch();
+        }
+    }
+    all.len()
+}
+
 /// Revisions of mirror paragraphs, kept from one mirror to the next so unchanged pairs hit the
 /// layout cache: (source rev, translation rev) → mirror paragraph rev.
 #[derive(Default)]

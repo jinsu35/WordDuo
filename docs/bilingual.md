@@ -23,23 +23,32 @@ paragraph shows its translation, keeping the source paragraph's formatting
 (`LayoutOptions::pad_after`) so both documents paginate alike, so every paragraph and its
 translation start at the same place on the same page. The canvas crossfades the two page images.
 
+You always type into the language you are **working in**. Switching it swaps every paragraph
+with its translation, in the document and in the undo history, so the language you work in is
+the one that is edited, printed, exported and saved as visible text. The other one stays hidden
+beside it. Switching is not an undo step.
+
 | Gesture | Effect |
 |---|---|
-| Hold **⌥ Option** (Alt) by itself | Show the other language while held |
-| **Twist two fingers** on the trackpad (clockwise / anticlockwise), like a dial | Blend more / less of the translation |
-| Slider at the bottom of the page | Same blend, by mouse |
+| **Tap ⌥ Option** (Alt) by itself | Switch the language you work in |
+| **Hold ⌥ Option** by itself | Peek at the other language while held |
+| **Twist two fingers** on the trackpad, like a dial (about 35° end to end) | Blend from one language to the other; past the middle, the language you work in switches too |
+| Slider at the bottom of the page (the language you work in is in bold) | Same as twisting, by mouse |
 | Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
+
+The view is on by default. A document without translations looks as it would without it.
 
 ## Commands
 
 | Id | What it does |
 |---|---|
 | `bilingual.view` | Bilingual view on/off |
-| `bilingual.mix` `{"value": 0–1}` | Blend (0 text, 1 translation) |
+| `bilingual.mix` `{"value": 0–1}` | Blend (0: the text the document opened with, 1: its translation) |
+| `bilingual.switch` `{"value"?: bool, "keepBlend"?: bool}` | Work in the other language (see above) |
 | `bilingual.edit` | Show translations under their paragraphs, to write and edit them |
 | `bilingual.translate` `{"text"?, "lang"?}` | Add or set the translation of the paragraph at the caret. Without `text` it opens it for editing. The default language is Korean for English text and English for Korean |
 | `bilingual.pair` `{"by"?: "language" \| "alternate"}` | Turn an interleaved document (EN, KO, EN, KO…) into pairs. Empty paragraphs between a pair are removed |
-| `bilingual.swap` | Swap every paragraph with its translation |
+| `bilingual.swap` | Swap every paragraph with its translation, as an undoable edit |
 | `bilingual.pairs` | List the pairs (for agents, the CLI and MCP) |
 
 For example:
@@ -48,8 +57,8 @@ For example:
 ## Limits (for now)
 
 - Only top-level body paragraphs pair; paragraphs in tables, headers, footers and notes don't.
-- The blended or flipped view is for reading. Editing types into the source text; edit
-  translations with Edit Translations.
+- While the two are blended, typing goes to the language you work in (the bold one).
+- Saving keeps the language you were working in as the visible text: Word shows that one.
 - Pagination matches line for line. A paragraph that splits across pages can split at a
   different line in each language when their line heights differ.
 - Holding Alt on Windows and Linux doesn't open KeyTips while the view is on.
