@@ -34,6 +34,7 @@ beside it. Switching is not an undo step.
 | **Hold ⌥ Option** alone, ¼ s or more (Ctrl elsewhere) | Peek at the other language while held. ⌥⌫, ⌥← and other Option chords never peek |
 | **Click while peeking** | Work in the language peeked at, with the insertion point where you clicked |
 | **Twist two fingers** on the trackpad, like a dial (about 35° end to end) | Blend from one language to the other; past the middle, the language you work in switches too |
+| Badge above the page | The page's language: filled while you work in it (Korean blue, English amber), outlined while you peek at the other one; it grows for a moment when the language switches |
 | Slider at the bottom of the page (the language you work in is in bold) | Same as twisting, by mouse |
 | Pinch, ⌘ / Ctrl + scroll | Zoom the page, as always |
 

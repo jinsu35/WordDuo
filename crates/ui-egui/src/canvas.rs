@@ -38,6 +38,8 @@ pub struct CanvasState {
     /// The bilingual view's language worked in, and how many times it has switched (the blend's
     /// easing starts afresh after a switch).
     bi_epoch: (bool, u64),
+    /// When the language worked in last switched (interface time), for the language badge's pulse.
+    bi_switched_at: Option<f64>,
     /// When the bilingual switch key (Option, or Ctrl off macOS) went down, and whether it has
     /// been alone since ([`bilingual_switch_key`]).
     bi_key: Option<(f64, bool)>,
@@ -173,6 +175,7 @@ impl Default for CanvasState {
             textures: HashMap::new(),
             mirror_textures: HashMap::new(),
             bi_epoch: (false, 0),
+            bi_switched_at: None,
             bi_key: None,
             bi_click: false,
             page_keys: PageKeys::default(),
@@ -794,6 +797,7 @@ fn bilingual_blend(app: &mut WordApp, ctx: &egui::Context, on: bool) -> f32 {
     if app.canvas.bi_epoch.0 != flipped {
         app.canvas.bi_epoch = (flipped, app.canvas.bi_epoch.1.wrapping_add(1));
         std::mem::swap(&mut app.canvas.textures, &mut app.canvas.mirror_textures);
+        app.canvas.bi_switched_at = Some(ctx.input(|i| i.time));
     }
     let secs = if app.animations_on() { 0.12 } else { 0.0 };
     ctx.animate_value_with_time(egui::Id::new(("bilingual-blend", app.canvas.bi_epoch.1)), target, secs)
@@ -837,6 +841,74 @@ fn language_name(text: &str) -> &'static str {
     if wordcraft_engine::bilingual::is_korean(text) { "한국어" } else { "English" }
 }
 
+/// The language of the page worked in: its text's, or the other one of its translations' when
+/// nothing is written in it yet; English in an empty document. Reads the first few thousand
+/// characters only.
+fn working_language(doc: &wordcraft_doc::Document, flipped: bool) -> &'static str {
+    const ENOUGH: usize = 4000;
+    let (mut shown, mut hidden) = (String::new(), String::new());
+    for b in &doc.body {
+        let Some(p) = b.as_para() else { continue };
+        let into = if wordcraft_engine::bilingual::is_translation(p) { &mut hidden } else { &mut shown };
+        if into.len() < ENOUGH {
+            into.push_str(&p.text);
+        }
+        if shown.len() >= ENOUGH && hidden.len() >= ENOUGH {
+            break;
+        }
+    }
+    let other = |l: &str| if l == "한국어" { "English" } else { "한국어" };
+    if !shown.trim().is_empty() {
+        language_name(&shown)
+    } else if !hidden.trim().is_empty() {
+        other(language_name(&hidden))
+    } else if flipped {
+        "한국어"
+    } else {
+        "English"
+    }
+}
+
+/// The language badge's colour: blue for Korean, amber for English.
+fn language_color(name: &str) -> Color32 {
+    if name == "한국어" { Color32::from_rgb(0x1F, 0x5F, 0xB8) } else { Color32::from_rgb(0xC2, 0x6A, 0x00) }
+}
+
+/// View › Bilingual: which language's page this is, in a badge above the pages. Filled: the
+/// language worked in. Outlined: the other one, seen while peeking (or blended past the middle).
+/// It grows for a moment when the language switches.
+fn language_badge(app: &mut WordApp, ctx: &egui::Context, area: Rect, blend: f32) {
+    let flipped = app.session.view.bilingual_flipped;
+    let working = working_language(&app.session.doc, flipped);
+    let other = if working == "한국어" { "English" } else { "한국어" };
+    let peeking = blend > 0.5 && app.session.bilingual_mirror().is_some();
+    let name = if peeking { other } else { working };
+    let color = language_color(name);
+    borrow_faces_for(app, ctx, name);
+    let now = ctx.input(|i| i.time);
+    let since = app.canvas.bi_switched_at.map_or(f64::MAX, |t| now - t);
+    const PULSE: f64 = 0.6;
+    let grow = if since < PULSE && app.animations_on() {
+        ctx.request_repaint();
+        (1.0 - since / PULSE) as f32
+    } else {
+        0.0
+    };
+    let size = 15.0 + 9.0 * grow;
+    egui::Area::new(egui::Id::new("bilingual-language"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .fixed_pos(pos2(area.center().x, area.min.y + 10.0))
+        .pivot(egui::Align2::CENTER_TOP)
+        .show(ctx, |ui| {
+            let (fill, text, stroke) =
+                if peeking { (ui.visuals().panel_fill, color, egui::Stroke::new(2.0, color)) } else { (color, Color32::WHITE, egui::Stroke::NONE) };
+            egui::Frame::new().fill(fill).stroke(stroke).corner_radius(14.0).inner_margin(egui::Margin::symmetric(14, 5)).show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(format!("● {name}")).size(size).strong().color(text)).extend());
+            });
+        });
+}
+
 /// View › Bilingual: the blend slider at the foot of the document, between the two languages,
 /// and how to switch, peek and twist.
 fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens) {
@@ -852,6 +924,12 @@ fn bilingual_chip(app: &mut WordApp, ctx: &egui::Context, area: Rect, t: &Tokens
         let text = |i: usize| doc.body.get(i).and_then(|x| x.as_para()).map(|p| p.plain_text()).unwrap_or_default();
         let (shown, hidden) = (language_name(&text(*a)), language_name(&text(*b)));
         if app.session.view.bilingual_flipped { (hidden, shown) } else { (shown, hidden) }
+    });
+    // No translations yet: the language written so far (English in an empty document), then the
+    // other one.
+    let names = names.or_else(|| {
+        let written: String = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect();
+        Some(if language_name(&written) == "한국어" && !written.trim().is_empty() { ("한국어", "English") } else { ("English", "한국어") })
     });
     let (left, right) = match names {
         Some((l, r)) if l != r => (l.to_string(), r.to_string()),
@@ -1013,7 +1091,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate));
     // View › Bilingual: twisting two fingers on the trackpad blends the translation in or out.
     let mirror = app.session.bilingual_mirror();
-    if mirror.is_some() && ui.rect_contains_pointer(area) {
+    // Also before there are translations: switching makes them (bilingual.switch).
+    let bilingual = mirror.is_some() || (app.session.view.bilingual && !app.session.view.read_mode);
+    if bilingual && ui.rect_contains_pointer(area) {
         bilingual_twist(app, ui);
     }
     if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
@@ -1022,8 +1102,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
         let _ = app.run(id, json!({"value": pct}));
     }
-    // On by default, so only a document with translations shows the blend slider.
-    if mirror.is_some() && !app.session.view.read_mode {
+    // The blend slider, from the start: a new document can be switched to write its translation.
+    if bilingual && !app.session.view.read_mode {
         bilingual_chip(app, ui.ctx(), area, &t);
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
@@ -1189,6 +1269,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let content_origin = ui.min_rect().min;
         let view = view_key(app, dim_body);
         let blend = bilingual_blend(app, ui.ctx(), mirror.is_some());
+        if bilingual && !app.session.view.read_mode {
+            language_badge(app, ui.ctx(), area, blend);
+        }
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             let Some(page) = layout.pages.get(i) else { continue };
@@ -3074,6 +3157,29 @@ mod tests {
         assert!(!app.session.view.bilingual_flipped, "tapped back");
     }
 
+    /// The badge names the page's language: its text's, the other one of its translations' while
+    /// it is still empty, English in an empty document.
+    #[test]
+    fn the_language_badge_names_the_page_worked_in() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let lang = |app: &WordApp| working_language(&app.session.doc, app.session.view.bilingual_flipped);
+        assert_eq!(lang(&app), "English");
+        app.run("text.insert", json!({"text": "Hello there."})).unwrap();
+        assert_eq!(lang(&app), "English");
+        app.run("bilingual.switch", json!({})).unwrap();
+        assert_eq!(lang(&app), "한국어", "an empty Korean page");
+        app.run("text.insert", json!({"text": "안녕하세요."})).unwrap();
+        assert_eq!(lang(&app), "한국어");
+        app.run("bilingual.switch", json!({})).unwrap();
+        assert_eq!(lang(&app), "English");
+        // A Korean document: Korean, then an empty English page.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "좋은 통역사는 의도를 듣는다."})).unwrap();
+        assert_eq!(lang(&app), "한국어");
+        app.run("bilingual.switch", json!({})).unwrap();
+        assert_eq!(lang(&app), "English");
+    }
+
     /// The user's report: a new document from the released app, and ⌥ did nothing. A tap in a
     /// document without translations switches to write the other language.
     #[test]
@@ -3091,6 +3197,22 @@ mod tests {
         assert!(!key_frame(&mut app, &ctx, 2.0, true, vec![]));
         assert!(key_frame(&mut app, &ctx, 2.0 + PEEK_AFTER, true, vec![]));
         assert!(!key_frame(&mut app, &ctx, 2.5, false, vec![]));
+        // The slider (or the dial) past the middle does the same in a new document.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello."})).unwrap();
+        set_bilingual_blend(&mut app, &ctx, 0.3);
+        assert!(!app.session.view.bilingual_flipped, "not past the middle");
+        set_bilingual_blend(&mut app, &ctx, 0.8);
+        assert!(app.session.view.bilingual_flipped, "past the middle: switched");
+        assert!(app.session.bilingual_mirror().is_some());
+        // The slider (or the dial) past the middle does the same in a new document.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Hello."})).unwrap();
+        set_bilingual_blend(&mut app, &ctx, 0.3);
+        assert!(!app.session.view.bilingual_flipped, "not past the middle");
+        set_bilingual_blend(&mut app, &ctx, 0.8);
+        assert!(app.session.view.bilingual_flipped, "past the middle: switched");
+        assert!(app.session.bilingual_mirror().is_some());
         // Reading, it stays off.
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
         app.run("text.insert", json!({"text": "Hello."})).unwrap();
