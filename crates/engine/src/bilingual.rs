@@ -126,6 +126,101 @@ pub fn swap_pairs(doc: &mut Document) -> usize {
     all.len()
 }
 
+/// Characters `a` and `b` share at their start or, if more, at their end.
+fn shared_chars(a: &str, b: &str) -> usize {
+    let prefix = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    let suffix = a.chars().rev().zip(b.chars().rev()).take_while(|(x, y)| x == y).count();
+    prefix.max(suffix)
+}
+
+/// After an edit (`before` → `doc`) that split a paragraph with a translation (Enter, a paste of
+/// several paragraphs), keep the translation with the paragraph it translates: the piece that
+/// kept most of its text (the first piece, when even; the second, after Enter at its start). The
+/// new paragraphs then come after the translation instead of taking it over. Top-level
+/// selection paths follow the paragraphs that move. Returns whether anything moved.
+pub fn keep_pairs(before: &Document, doc: &mut Document, sel: &mut crate::Selection) -> bool {
+    let mut moved = false;
+    for (s, t) in pairs(before) {
+        let (Some(src), Some(tr)) = (before.body.get(s), before.body.get(t)) else { continue };
+        let Some(source_text) = src.as_para().map(|p| p.text.clone()) else { continue };
+        // The translation, untouched by the edit.
+        let Some(j) = doc.body.iter().position(|b| Arc::ptr_eq(b, tr)) else { continue };
+        // The nearest block before the source the edit left alone, in both documents.
+        let anchor = (0..s).rev().find_map(|a| {
+            let blk = before.body.get(a)?;
+            doc.body.iter().position(|b| Arc::ptr_eq(b, blk)).map(|a2| (a, a2))
+        });
+        let (len_before, len_after) = match anchor {
+            Some((a, a2)) => (t.saturating_sub(a + 1), j.saturating_sub(a2 + 1)),
+            None => (t, j),
+        };
+        let Some(growth) = len_after.checked_sub(len_before).filter(|g| *g > 0) else { continue };
+        let Some(first) = j.checked_sub(growth + 1) else { continue };
+        // The pieces the source was split into: paragraphs, none of them a translation.
+        let pieces: Option<Vec<(usize, usize)>> = (first..j)
+            .map(|i| doc.body.get(i).and_then(|b| b.as_para()).filter(|p| !is_translation(p)).map(|p| (i, shared_chars(&p.text, &source_text))))
+            .collect();
+        let Some(pieces) = pieces else { continue };
+        let Some(best) = pieces.iter().fold(None::<(usize, usize)>, |acc, &(i, sc)| match acc {
+            Some((_, b)) if b >= sc => acc,
+            _ => Some((i, sc)),
+        }) else {
+            continue;
+        };
+        let to = best.0 + 1;
+        if to == j {
+            continue;
+        }
+        let blk = doc.body.remove(j);
+        doc.body.insert(to, blk);
+        // Paragraphs between the piece and the translation's old place move down one.
+        for p in [&mut sel.anchor, &mut sel.focus] {
+            if p.story == StoryRef::Body
+                && let Some(i) = p.path.0.first_mut()
+                && (to as u32..j as u32).contains(i)
+            {
+                *i += 1;
+            }
+        }
+        moved = true;
+    }
+    moved
+}
+
+/// What a copy holds of `frag`, copied from a document whose translations are hidden: no
+/// hidden translation paragraphs (they weren't seen), and none at its end either (a selection
+/// ending at the start of one), whose style a paste would otherwise bring along.
+pub fn visible_fragment(frag: &mut wordcraft_doc::edit::Fragment) {
+    if frag.blocks.len() < 2 {
+        return;
+    }
+    let last = frag.blocks.len() - 1;
+    let mut i = 0;
+    frag.blocks.retain_mut(|b| {
+        let keep = match b {
+            Block::Para(p) if is_translation(p) && i == last => {
+                p.props.style = None;
+                true
+            }
+            Block::Para(p) if is_translation(p) && i > 0 => false,
+            _ => true,
+        };
+        i += 1;
+        keep
+    });
+}
+
+/// A paste never makes translations: pasted paragraphs in the translation style lose it.
+pub fn untranslated(frag: &mut wordcraft_doc::edit::Fragment) {
+    for b in &mut frag.blocks {
+        if let Block::Para(p) = b
+            && is_translation(p)
+        {
+            p.props.style = None;
+        }
+    }
+}
+
 /// Where `pos` (in `before`) goes once its paragraph's text changed language (`after`): the same
 /// share of the way through the paragraph, at a character boundary. Offsets don't carry over
 /// between two languages' texts; a paragraph whose text didn't change keeps its offset.

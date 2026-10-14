@@ -720,6 +720,14 @@ fn bilingual_switch_key(app: &mut WordApp, ctx: &egui::Context) -> bool {
     // A text box of the interface (Find, a dialog) has the keys.
     let typing_elsewhere = ctx.egui_wants_keyboard_input() && !app.canvas.focused;
     let clean = !other && !busy && !typing_elsewhere;
+    if down != app.canvas.bi_key.is_some() || (down && !clean && app.canvas.bi_key.is_some_and(|(_, c)| c)) {
+        log::trace!(
+            target: "wordcraft_ui_egui::bilingual",
+            "switch key down={down} other={other} busy={busy} elsewhere={typing_elsewhere} focused={} since={:?}",
+            app.canvas.focused,
+            app.canvas.bi_key.map(|(t, c)| (now - t, c))
+        );
+    }
     match (down, app.canvas.bi_key) {
         (true, None) => {
             app.canvas.bi_key = Some((now, clean));

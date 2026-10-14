@@ -277,3 +277,65 @@ fn switching_language_never_carries_a_selection_into_the_other_text() {
     assert!(s.sel.is_collapsed());
     assert!(s.doc.para_at(&s.sel.focus).is_some_and(|p| p.text.is_char_boundary(s.sel.focus.off)));
 }
+
+fn layout_of(s: &Session) -> Vec<(bool, String)> {
+    s.doc.body.iter().map(|b| b.as_para().map(|p| (crate::bilingual::is_translation(p), p.plain_text())).unwrap_or_default()).collect()
+}
+
+/// Splitting a paragraph (Enter, a paste of paragraphs) keeps its translation with it; the new
+/// paragraphs come after the translation rather than taking it over.
+#[test]
+fn a_split_paragraph_keeps_its_translation() {
+    let pair = || {
+        let mut s = Session::new(doc_of(&["abc def.", "Next."]));
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        run(&mut s, "bilingual.translate", json!({"text": "가나다 라마."}));
+        s
+    };
+    let t = |b: bool, x: &str| (b, x.to_string());
+    // Enter at the end, then a new sentence.
+    let mut s = pair();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "abc def.".len()));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "New."}));
+    assert_eq!(layout_of(&s), vec![t(false, "abc def."), t(true, "가나다 라마."), t(false, "New."), t(false, "Next.")]);
+    assert_eq!(s.sel.focus.path.0, vec![2], "the insertion point is in the new paragraph");
+    // Enter in the middle: the first half keeps it.
+    let mut s = pair();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 4));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(layout_of(&s), vec![t(false, "abc "), t(true, "가나다 라마."), t(false, "def."), t(false, "Next.")]);
+    // Enter at the start: the text moves down, and the translation with it.
+    let mut s = pair();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(layout_of(&s), vec![t(false, ""), t(false, "abc def."), t(true, "가나다 라마."), t(false, "Next.")]);
+    // Undo puts it back as it was.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(layout_of(&s), vec![t(false, "abc def."), t(true, "가나다 라마."), t(false, "Next.")]);
+}
+
+/// Copying a whole paragraph (its selection runs to the start of the hidden translation after
+/// it) and pasting it at the end of another: no empty translation appears, and every
+/// translation stays with its paragraph.
+#[test]
+fn copying_paragraphs_never_moves_or_makes_translations() {
+    let mut s = Session::new(doc_of(&["One.", "Two."]));
+    for (b, ko) in [(0, "하나."), (2, "둘.")] {
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(b, 0));
+        run(&mut s, "bilingual.translate", json!({"text": ko}));
+    }
+    run(&mut s, "bilingual.switch", json!({}));
+    run(&mut s, "select.text", json!({"text": "둘."}));
+    run(&mut s, "select.paragraph", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(!s.clipboard_text.contains("Two"), "the hidden English isn't copied: {:?}", s.clipboard_text);
+    run(&mut s, "bilingual.switch", json!({}));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, "One.".len()));
+    run(&mut s, "edit.paste", json!({}));
+    let l = layout_of(&s);
+    assert_eq!(l.iter().filter(|(tr, _)| *tr).count(), 2, "no new translation: {l:?}");
+    assert_eq!(l.first(), Some(&(false, "One.둘.".to_string())), "{l:?}");
+    assert_eq!(l.get(1), Some(&(true, "하나.".to_string())), "{l:?}");
+    assert_eq!(pairs(&s.doc).len(), 2, "{l:?}");
+}

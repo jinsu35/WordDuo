@@ -1346,6 +1346,10 @@ impl Session {
                     // Formatting changed while tracking becomes a formatting revision.
                     if let Some((before, ..)) = &before_doc {
                         crate::cmd::fmt_revisions::record(self, id, before);
+                        // A split paragraph keeps its translation (View › Bilingual).
+                        if !id.starts_with("bilingual.") && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+                            crate::bilingual::keep_pairs(before, &mut self.doc, &mut self.sel);
+                        }
                     }
                     self.touch();
                     self.doc.ensure_nonempty();

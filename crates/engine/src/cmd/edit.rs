@@ -158,7 +158,11 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
     if a == b {
         return Ok(json!({"text": ""}));
     }
-    let f = s.doc.copy_range(&a, &b);
+    let mut f = s.doc.copy_range(&a, &b);
+    // Hidden translations aren't copied (View › Bilingual).
+    if !(s.view.bilingual_edit || s.view.marks || s.prefs.marks.hidden) {
+        crate::bilingual::visible_fragment(&mut f);
+    }
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
