@@ -27,21 +27,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .resizable(false)
         .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
-            let back = if mac {
+            if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
-                // bar: the back button sits beside the traffic lights, centred with them and as far
-                // from them as the title bar's own controls, and the rest of the band drags the window.
-                let (band, drag) = ui.allocate_exact_size(vec2(200.0, crate::chrome::MAC_TITLE_BAR), Sense::click_and_drag());
+                // bar and drags the window. The back button gets its own row below it: beside the
+                // traffic lights it was a small target, and macOS 26 draws the lights larger and
+                // further apart than the band could know (no AppKit calls here), so they crowded it.
+                let (_, drag) = ui.allocate_exact_size(vec2(200.0, crate::chrome::MAC_TITLE_BAR), Sense::click_and_drag());
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                // The chevron's stroke starts at the content edge.
-                let c = pos2(band.min.x + crate::chrome::MAC_CONTENT_LEFT + 3.0, band.center().y);
-                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
-                resp
-            } else {
+            }
+            let back = {
                 let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(28));
+                }
                 icons::paint(
                     ui.painter(),
                     Rect::from_center_size(pos2(r.min.x + 26.0, r.center().y), vec2(18.0, 18.0)),
@@ -56,7 +56,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
-            ui.add_space(if mac { 12.0 } else { 6.0 });
+            ui.add_space(6.0);
             for (id, label) in PAGES {
                 let (r, resp) = ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
